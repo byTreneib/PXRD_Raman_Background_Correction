@@ -30,8 +30,8 @@ MAX_THREADS = 2  # edit        exceeding 2 is not recommended since MemoryErrors
 # scan_number_length = 6  # edit      specifies length of scan number (with zeroes)
 # image_number_length = 6  # edit     specifies length of image number (with zeroes)
 
-wave_min = 0.0  # edit  change value to set minimum value of x to process
-wave_max = 20000  # edit    change value to set maximum value of x to process
+wave_min = 100.0  # edit  change value to set minimum value of x to process
+wave_max = 2000  # edit    change value to set maximum value of x to process
 
 include_header = True  # edit
 
@@ -537,4 +537,8 @@ def main():
 
 
 if __name__ == '__main__':  # only executes main code, if this program is directly executed
+    try:
+        test_row_index = int(test_row_index)
+    except TypeError:
+        raise TypeError("Column index could not be converted to int. Make sure to use a valid column index")
     main()
