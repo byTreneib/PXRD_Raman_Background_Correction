@@ -9,29 +9,34 @@ import threading
 import warnings
 import time
 from pprint import pprint
+from tkinter.filedialog import askopenfilenames
+from tkinter import Tk
+from os import getcwd
 
 warnings.filterwarnings("ignore")
-read_file_types = ['chi', 'raman']
+read_file_types = ['chi', 'dat', 'raman', 'txt']
+# file extensions recognized by the program: .chi, .dat -> read as chi; .raman, .txt -> read as raman
+
 
 # the following variables are to be edited by the user to fit their needs and the specifications of the files to be read
-
-file_start = 'AIM741_01_Lj1.txt'  # edit    please note, that all files have to be in the same directory
-# file_start = 'chi-test2/Sep19_000308_000001.chi'  # edit    please note, that all files have to be in the same directory
-# file_end = 'chi-test2/Sep19_000312_000050.chi'  # edit      leave empty if only one file should be processed
-file_end = ''
-
-
-read_file_type = 'raman'  # edit    change to whatever input file type desired (available types are listed in line 16)
 
 dat_file_separator = '\t'  # edit   set to the desired separator, that will be used when writing to .dat files
 
 use_multiple_threads = False  # edit      turn on to process with max. 30 threads (number of threads can be modified)
-MAX_THREADS = 20  # edit        exceeding 30 is not recommended since MemoryErrors could occur
+MAX_THREADS = 2  # edit        exceeding 2 is not recommended since MemoryErrors and performance issues could occur
 
-scan_number_position = -17  # edit      specifies position of scan number
-image_number_position = -10  # edit     specifies position of image number
-scan_number_length = 6  # edit      specifies length of scan number (with zeroes)
-image_number_length = 6  # edit     specifies length of image number (with zeroes)
+# scan_number_position = -17  # edit      specifies position of scan number
+# image_number_position = -10  # edit     specifies position of image number
+# scan_number_length = 6  # edit      specifies length of scan number (with zeroes)
+# image_number_length = 6  # edit     specifies length of image number (with zeroes)
+
+wave_min = 0.0  # edit  change value to set minimum value of x to process
+wave_max = 20000  # edit    change value to set maximum value of x to process
+
+include_header = True  # edit
+
+# edit  select column index test are run on; type: Integer; set to '' (emptystring) if no testing is required
+test_row_index = ''
 
 plot_data = True  # edit  set true to plot all processed datasets; not recommended when multiple datasets are processed
 
@@ -41,9 +46,10 @@ baseline_itermax = 10  # edit  maximum number of iterations for creation of the 
 
 
 class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
-    def __init__(self, filename, i_column_name):
+    def __init__(self, filename, i_column_name, include_head=include_header):
         self.filename = filename
         self.i_column_name = i_column_name
+        self.include_head = include_header
 
         if __name__ == '__main__':  # only show debug output if this file is directly executed
             print(f"[ReadChiToDF] Reading {self.filename}")
@@ -56,7 +62,10 @@ class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
 
     def file_content_to_df(self):
         lines_raw = self.file_content.split("\n")  # splits up lines and removes the header
-        lines = list(map(lambda x: x.split(), lines_raw[4:-1]))  # splits up the columns of each line
+        if self.include_head:
+            lines = list(map(lambda x: x.split(), lines_raw[4:-1]))  # splits up the columns of each line
+        else:
+            lines = list(map(lambda x: x.split(), lines_raw[:-1]))  # splits up the columns of each line
 
         x_column = list(map(lambda x: float(x[0]), lines))  # creates list out of first column (angles)
         y_column = list(map(lambda x: float(x[1]), lines))  # creates list out of second column (intensity)
@@ -72,14 +81,15 @@ class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
 
 
 class WriteDFToFile:  # Class to write pandas DataFrames into a chi/dat file
-    def __init__(self, df, filename, head="", sep="  "):
+    def __init__(self, df, filename, head="", sep="  ", include_head=include_header):
         self.df = df.transpose()
         self.filename = filename
         self.sep = sep
-        self.head = head
+        self.head = head if include_head else ''
 
         self.nr_rows = len(df)
         self.nr_columns = len(df.columns)
+
         # Thread(self.df_to_string()).start()
         self.df_to_string()
 
@@ -97,8 +107,9 @@ class WriteDFToFile:  # Class to write pandas DataFrames into a chi/dat file
 
 
 class ReadRamanToDF:  # Class to read Raman file into pandas DataFrames
-    def __init__(self, filename):
+    def __init__(self, filename, include_head=include_header):
         self.filename = filename
+        self.include_head = include_head
 
         if __name__ == '__main__':  # only shows debug output when this program is directly executed
             print(f"[ReadRamanToDF] Reading {self.filename}")
@@ -111,9 +122,16 @@ class ReadRamanToDF:  # Class to read Raman file into pandas DataFrames
 
     def file_content_to_df(self):
         lines_raw = self.file_content.split("\n")  # splits up lines and removes the header
-        lines = list(map(lambda x: x.split(), lines_raw[1:-1]))  # splits up the columns of each line
+        if self.include_head:
+            lines = list(map(lambda x: x.split(), lines_raw[1:-1]))  # splits up the columns of each line
+        else:
+            lines = list(map(lambda x: x.split(), lines_raw[:-1]))  # splits up the columns of each line
 
-        column_names = ['RamanShift (cm-1)', *lines_raw[0].split()[2:]]
+        num_columns = len(lines[0])
+        try:
+            column_names = ['RamanShift (cm-1)', *lines_raw[0].split()[2:]]
+        except IndexError:
+            column_names = ['RamanShift (cm-1)', *list('I_' + str(x) for x in range(num_columns-1))]
 
         content_df = pd.DataFrame(columns=('RamanShift (cm-1)', *column_names[1:]))
 
@@ -127,8 +145,6 @@ class ReadRamanToDF:  # Class to read Raman file into pandas DataFrames
             y_column = list(map(lambda x: float(x[column_index]), lines))
 
             content_df[column_name] = y_column
-
-        pprint(content_df)
 
         return content_df, column_names  # returns the df and head (column titles in this case)
 
@@ -301,6 +317,7 @@ def add_baseline_diff(df, probe_name, return_df):
 
     return return_df, test_baseline_return  # return edited return_df and the baseline
 
+
 # ***************************************#
 
 
@@ -317,63 +334,96 @@ def fill_chars(string: str, max_length: int, char: str = '0'):
 # ****************************************#
 
 
-@timeit  # record time this function takes to execute
-def read_files(read_type=read_file_type):
-    # The following variables are to be edited depending on the input files
+# @timeit  # record time this function takes to execute
+# def read_files(read_type=read_file_type):
+#     # The following variables are to be edited depending on the input files
+#     data_frames = []
+#     files = []
+#     heads = []
+#
+#     if file_end == '':  # only one file to read
+#         if read_type == 'chi':
+#             file_content, file_head = read_chi_to_df(file_start)
+#         elif read_type == 'raman':
+#             file_content, file_head = read_raman_to_df(file_start)
+#             file_head = ["", "", "", dat_file_separator.join(file_head)]  # completes raman head to 4 lines
+#         files = [file_start]
+#         data_frames = [file_content]
+#         heads = [file_head]
+#
+#     else:  # multiple files to read
+#         #  get start and end of scan and image number
+#         start_scan_number = int(file_start[scan_number_position: scan_number_position+scan_number_length])
+#         start_image_number = int(file_start[image_number_position: image_number_position+image_number_length])
+#
+#         end_scan_number = int(file_end[scan_number_position: scan_number_position+scan_number_length])
+#         end_image_number = int(file_end[image_number_position: image_number_position+image_number_length])
+#
+#         # iterates through all scan numbers in between of start and end (start < end required)
+#         for scan_number in range(start_scan_number, end_scan_number + 1):
+#             # iterates through all image numbers from start to 10^image_number_length (max. image number)
+#             for image_number in range(start_image_number, 10**image_number_length):
+#                 # breaks iteration when end image number is exceeded and end scan number is reached
+#                 if scan_number == end_scan_number and image_number > end_image_number:
+#                     break
+#                 # puts together the filename depending of current value of scan_number and image_number
+#                 filename = file_start[:scan_number_position] + fill_chars(str(scan_number), scan_number_length) + \
+#                     file_start[scan_number_position+scan_number_length: image_number_position] + \
+#                     fill_chars(str(image_number), image_number_length) + '.chi'
+#                 #  checks if file exists, then appends filename to files list
+#                 #  if file does not exist most probably the max. of existing image numbers is reached -> breaks the loop
+#                 try:
+#                     open(filename).close()
+#                     files.append(filename)
+#                 except FileNotFoundError:
+#                     print(f'File {filename} not found.. skipping to scan number {scan_number + 1}')
+#                     break
+#
+#         # iterates through all files and creates dataFrames out of the read values, that are saved in df list
+#         for file in files:
+#             if read_type == 'chi':
+#                 file_content, file_head = read_chi_to_df(file)
+#             elif read_type == 'raman':
+#                 file_content, file_head = read_raman_to_df(file)
+#                 file_head = ["", "", "", dat_file_separator.join(file_head)]
+#             else:
+#                 NotImplementedError(f"The desired file type has not yet been implemented! The following file types"
+#                                     f" are available: {', '.join(read_file_types)}")
+#             data_frames.append(file_content)
+#             heads.append(file_head)
+#
+#     return data_frames, files, heads  # returns both the list of dataFrames and the file list
+
+def read_files():
     data_frames = []
-    files = []
     heads = []
 
-    if file_end == '':  # only one file to read
-        if read_type == 'chi':
-            file_content, file_head = read_chi_to_df(file_start)
-        elif read_type == 'raman':
-            file_content, file_head = read_raman_to_df(file_start)
-            file_head = ["", "", "", dat_file_separator.join(file_head)]  # completes raman head to 4 lines
-        files = [file_start]
-        data_frames = [file_content]
-        heads = [file_head]
+    main_window = Tk()  # opens tkinter window to let user select files to process
+    files = askopenfilenames(initialdir=getcwd(), filetypes=(("chi files", "*.chi"), ("dat files", "*.dat"),
+                                                             ("txt raman files", "*.txt"), ("raman files", "*.raman")),
+                             title='Select files to process')
+    main_window.destroy()  # close window after selection is done
 
-    else:  # multiple files to read
-        #  get start and end of scan and image number
-        start_scan_number = int(file_start[scan_number_position: scan_number_position+scan_number_length])
-        start_image_number = int(file_start[image_number_position: image_number_position+image_number_length])
+    print("[ReadFiles] Files selected:")
+    print("\n".join(files))
 
-        end_scan_number = int(file_end[scan_number_position: scan_number_position+scan_number_length])
-        end_image_number = int(file_end[image_number_position: image_number_position+image_number_length])
-
-        # iterates through all scan numbers in between of start and end (start < end required)
-        for scan_number in range(start_scan_number, end_scan_number + 1):
-            # iterates through all image numbers from start to 10^image_number_length (max. image number)
-            for image_number in range(start_image_number, 10**image_number_length):
-                # breaks iteration when end image number is exceeded and end scan number is reached
-                if scan_number == end_scan_number and image_number > end_image_number:
-                    break
-                # puts together the filename depending of current value of scan_number and image_number
-                filename = file_start[:scan_number_position] + fill_chars(str(scan_number), scan_number_length) + \
-                    file_start[scan_number_position+scan_number_length: image_number_position] + \
-                    fill_chars(str(image_number), image_number_length) + '.chi'
-                #  checks if file exists, then appends filename to files list
-                #  if file does not exist most probably the max. of existing image numbers is reached -> breaks the loop
-                try:
-                    open(filename).close()
-                    files.append(filename)
-                except FileNotFoundError:
-                    print(f'File {filename} not found.. skipping to scan number {scan_number + 1}')
-                    break
-
-        # iterates through all files and creates dataFrames out of the read values, that are saved in df list
-        for file in files:
-            if read_type == 'chi':
-                file_content, file_head = read_chi_to_df(file)
-            elif read_type == 'raman':
-                file_content, file_head = read_raman_to_df(file)
+    for file in files:
+        file_ext = file.split('.')[1]
+        read_type = file_ext
+        print(read_type)
+        if read_type in ['chi', 'dat']:
+            file_content, file_head = read_chi_to_df(file)
+        elif read_type in ['txt', 'raman']:
+            file_content, file_head = read_raman_to_df(file)
+            if test_row_index == '':
                 file_head = ["", "", "", dat_file_separator.join(file_head)]
             else:
-                NotImplementedError(f"The desired file type has not yet been implemented! The following file types"
-                                    f" are available: {', '.join(read_file_types)}")
-            data_frames.append(file_content)
-            heads.append(file_head)
+                file_head = ["", "", "", dat_file_separator.join([file_head[0], file_head[test_row_index]])]
+        else:
+            NotImplementedError(f"The desired file type has not yet been implemented! The following file types"
+                                f" are available: {', '.join(read_file_types)}")
+        data_frames.append(file_content)
+        heads.append(file_head)
 
     return data_frames, files, heads  # returns both the list of dataFrames and the file list
 
@@ -393,30 +443,61 @@ def extend_headers(heads):  # add baseline creation parameters to output file he
 
 def process_data(df, current_file, head):
     x_column_name = df.columns[0]
-    df.set_index(df[x_column_name])
+    min_selection = df[x_column_name] >= wave_min
+    max_selection = df[x_column_name] <= wave_max
+
+    x_column_selection = df[x_column_name].loc[(min_selection & max_selection)]
+    # determine whether to reverse the index or not for correct plotting
+    to_reverse = True if float(list(x_column_selection)[0]) > float(list(x_column_selection)[-1]) else False
+
     output_df = pd.DataFrame()
-    output_df[x_column_name] = df[x_column_name]
+    output_df[x_column_name] = x_column_selection
+
+    # pprint(df[x_column_name].loc[(min_selection & max_selection)])
+    # quit()
     # Formats the input DataFrame, then calculates the baseline and difference to the baseline and writes it to a file
     for column_name in df.columns:
-        if column_name == df.columns[0]:
-            continue
-        print(f"[{current_file}] Started Processing")
-        selection = (df[df.columns[0]] >= 0.5)  # edit    uses only q values >= 0.5
+        intensity = df[column_name].loc[(min_selection & max_selection)]
+        if to_reverse:
+            intensity = pd.DataFrame(intensity).set_index(x_column_selection.iloc[::-1])
+        else:
+            intensity = pd.DataFrame(intensity).set_index(x_column_selection)
 
-        data = pd.concat([df[df.columns[0]].loc[selection], df.loc[:, column_name:column_name].loc[selection]],
-                         axis='columns')
+        if column_name == x_column_name:
+            continue
+        try:
+            if test_row_index != '' and column_name != df.columns[test_row_index]:
+                continue
+        except IndexError:
+            pass
+        print(f"[{current_file}] Started Processing")
+
+        data = pd.concat([df[x_column_name].loc[(min_selection & max_selection)], df.loc[
+                                    :, column_name:column_name].loc[(min_selection & max_selection)]], axis='columns')
         data = data.reset_index(drop=True)
 
         output_df, baseline_diff = add_baseline_diff(data, column_name, output_df)
+        if to_reverse:
+            output_df = output_df.set_index(x_column_selection.iloc[::-1])
+        else:
+            output_df = output_df.set_index(x_column_selection)
+
+        baseline = pd.DataFrame()
+        baseline['baseline'] = baseline_diff
+        if to_reverse:
+            baseline = baseline.set_index(x_column_selection.iloc[::-1])
+        else:
+            baseline = baseline.set_index(x_column_selection)
 
         if plot_data:  # will plot every set of data if this option is enabled
             try:
-                plt.plot(df[column_name], color="blue")
-                plt.plot(output_df[column_name], color="green")
-                plt.plot(baseline_diff, color="red")
+                plt.plot(intensity, color="blue", label="intensity")
+                plt.plot(output_df[column_name], color="green", label="baseline difference")
+                plt.plot(baseline['baseline'], color="red", label="baseline")
 
                 plt.xlabel(x_column_name)
                 plt.ylabel("intensity")
+                plt.legend(loc='upper right')
                 plt.title(column_name)
 
                 plt.show()
@@ -424,6 +505,7 @@ def process_data(df, current_file, head):
                 print(f'[{current_file}] failed plotting')
 
     # output_df.to_csv(current_file[:-4] + 'bc.csv', index=False)  # writes the output_df dataFrame into a csv file
+
     WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
 
     print(f"[{current_file}] Finished processing")
