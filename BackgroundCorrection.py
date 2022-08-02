@@ -20,8 +20,7 @@ __version__ = "0.9.6"
 # Output file extension: dat
 # One has to play around with the lambda values. (Raman 1E5; Mill experiments <1E3)
 # If nothing happens: stop the script, restart PYTHON
-# One can change the order of the file extension for the file selection dialogue in line 97
-# files = askopenfilenames(initialdir=getcwd(), filetypes=
+# One can change the order of the file extension for the file selection dialogue in line 99
 #
 # Format of raman data: as spc-file or as one file with many columns
 # RamanShift (cm-1)	00:00:27	00:01:30	00:02:00	..:..:..	00:21:00
@@ -78,7 +77,7 @@ jar_correction = False
 jar_scaling_range = (0, -1)  # Set range as (start_value, end_value), e.g. (0, 100)
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
-norm_final = False
+norm_final = True
 
 # Minimum and maximum value for the x column
 # wave_min = 180
@@ -95,6 +94,11 @@ algorithm = 1
 baseline_itermax = 500  # number of iterations the algorithm will perform
 baseline_lambda = 500  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
 baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
+
+# Peak ROI Selection
+get_rois = True
+roi_start = 0.82
+roi_stop = 0.87
 
 # List of file types that will be available in the file input prompt
 readfile_ui_file_types = [("xy files", "*.xy"),
@@ -398,8 +402,24 @@ class BackgroundCorrection:
         data_frames, files, heads = self.read_files()
         heads = self.extend_headers(heads)
 
+        roi_areas = []
         for df, filename, head in zip(data_frames, files, heads):
-            self.process_data(df, filename, head)
+            roi_area = self.process_data(df, filename, head)
+
+            # if get_rois:
+            #     if roi_areas is None:
+            #         roi_x, roi_y = roi_area
+            #         roi_areas = pd.DataFrame(roi_area[0])
+            #     roi_areas[filename] = roi_area[1]
+
+            roi_areas.append(roi_area)
+
+        print(roi_areas)
+        # if get_rois:
+        #     plt.scatter(range(1, len(roi_areas)+1), roi_areas)
+        #     plt.show()
+
+        # TODO: Save ROIs
 
     def read_files(self):
         data_frames = []
@@ -418,9 +438,10 @@ class BackgroundCorrection:
 
             for file_list in subdir_files:
                 files.extend(file_list)
+
         main_window.destroy()  # close window after selection is done
 
-        print("[ReadFiles] Files selected:")
+        print(f"[ReadFiles] {len(files)} files selected:")
         print("\n".join(files))
 
         for file in files:
@@ -467,7 +488,7 @@ class BackgroundCorrection:
 
     def extend_headers(self, headers):
         for index, head in enumerate(headers):
-            header_extention_line2 = ", PXRD_raman_background_correction_V0.9.5.py"
+            header_extention_line2 = f", BackgroundCorrection.py (Version {__version__})"
             header_extention_line3 = f", Lambda = {baseline_lambda}, Ratio = {baseline_ratio}, " \
                                      f"Itermax = {baseline_itermax}"
 
@@ -536,6 +557,34 @@ class BackgroundCorrection:
 
         return jar_data, jar_corrected_ranged_x, jar_corrected_ranged_area, jar_min_selection, jar_max_selection
 
+    @timeit
+    def get_roi_area(self, df: pd.DataFrame, x_column_name: str, roi_start: float, roi_stop: float):
+        min_selection = df[x_column_name] >= roi_start
+        max_selection = df[x_column_name] <= roi_stop
+
+        roi_selection = df.loc[min_selection & max_selection]
+        roi_x = roi_selection.loc[:, df.columns == x_column_name]
+        roi_y = roi_selection.loc[:, df.columns != x_column_name]
+
+        y_sum = roi_y.sum(axis='columns').to_numpy()
+        y_area = np.trapz(x=roi_x.to_numpy().T[0], y=y_sum)
+
+        current_sum = 0
+        # y_area = []
+        # for y_sum_val in y_sum:
+        #     current_sum += y_sum_val
+        #     y_area.append(current_sum)
+
+        # y_area = [np.sum([y_sum[:i]]) for i in range(len(y_sum))]
+
+        # return_df = pd.DataFrame(columns=[x_column_name, "y_area"])
+        # return_df[x_column_name] = roi_x
+        # return_df["y_area"] = y_area
+
+        # return roi_x.to_numpy().T[0], np.array(y_area)
+
+        return y_area
+
     def process_data(self, df: pd.DataFrame, current_file: str, head: str):
         x_column_name = df.columns[0]
 
@@ -601,6 +650,13 @@ class BackgroundCorrection:
             #        print(f'[{current_file}] failed plotting')
 
         WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
+
+        if get_rois:
+            return self.get_roi_area(output_df, x_column_name, roi_start=roi_start, roi_stop=roi_stop)
+        else:
+            return None
+
+
 
 
 if __name__ == '__main__':
