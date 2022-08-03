@@ -38,9 +38,12 @@ __version__ = "0.9.6"
 ############## BEGIN OF IMPORTS ##############
 
 from tkinter.filedialog import askopenfilenames, askopenfilename, askdirectory
+from tkinter.messagebox import askyesno
 from tkinter import Tk
 from os import getcwd
 import os
+
+from warnings import warn
 
 from pyspectra.readers.read_spc import spc
 from scipy.sparse.linalg import spsolve
@@ -88,6 +91,7 @@ wave_max = 12.41
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
+do_correction = True
 algorithm = 1
 
 # Parameters for the baseline algorithm
@@ -117,7 +121,7 @@ def timeit(function):  # decorator function to record execution time of a functi
         return_value = function(*args, **kwargs)
         end_time = time.time()
 
-        print(f'[TIMEIT: {function.__name__}]: {round(end_time - start_time, 2)} seconds')
+        print(f'[TIMEIT: {function.__name__}]: {round(end_time - start_time, 6)} seconds')
 
         return return_value
 
@@ -239,10 +243,6 @@ class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
         content_df = pd.DataFrame(columns=('q', self.i_column_name))  # creates empty dataframe to store x and y column
         content_df['q'] = x_column  # writes x_column list into 'q' column
         content_df[self.i_column_name] = y_column  # writes y_column list into 'I' (or whatever was specified) column
-
-        if __name__ == '__main__':  # only show debug output if this file is directly executed
-            from pprint import pprint
-            pprint(content_df.head())
 
         return content_df, lines_raw[:4]  # returns the dataframe and the first 4 lines (head)
 
@@ -402,7 +402,7 @@ class BackgroundCorrection:
         data_frames, files, heads = self.read_files()
         heads = self.extend_headers(heads)
 
-        roi_areas = []
+        roi_areas_per_dict = {}
         for df, filename, head in zip(data_frames, files, heads):
             roi_area = self.process_data(df, filename, head)
 
@@ -412,14 +412,29 @@ class BackgroundCorrection:
             #         roi_areas = pd.DataFrame(roi_area[0])
             #     roi_areas[filename] = roi_area[1]
 
-            roi_areas.append(roi_area)
+            file_dir = os.path.dirname(filename)
 
-        print(roi_areas)
+            if file_dir in roi_areas_per_dict.keys():
+                roi_areas_per_dict[file_dir][0].append(os.path.basename(filename))
+                roi_areas_per_dict[file_dir][1].append(roi_area)
+
+            else:
+                roi_areas_per_dict[file_dir] = ([os.path.basename(filename)], [roi_area])
+
         # if get_rois:
         #     plt.scatter(range(1, len(roi_areas)+1), roi_areas)
         #     plt.show()
 
-        # TODO: Save ROIs
+        # TODO: Proper x-Scale for ROI values?
+        if get_rois:
+            print(roi_areas_per_dict)
+            for file_dir, roi_areas in roi_areas_per_dict.items():
+                data = np.array(roi_areas).T
+                np.savetxt(file_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
+
+                values = data[:, 1].astype(np.float64)
+                plt.scatter(range(1, len(values) + 1), values)
+                plt.savefig(file_dir + "\\rois_plot.png")
 
     def read_files(self):
         data_frames = []
@@ -444,15 +459,20 @@ class BackgroundCorrection:
         print(f"[ReadFiles] {len(files)} files selected:")
         print("\n".join(files))
 
+        data_files = []
+
         for file in files:
             file_content, file_head = self.read_file(file)
-            data_frames.append(file_content)
-            heads.append(file_head)
+
+            if file_content is not None and file_head is not None:
+                data_frames.append(file_content)
+                heads.append(file_head)
+                data_files.append(file)
 
         return data_frames, files, heads  # returns both the list of dataFrames and the file list
 
     def read_file(self, file):
-        file_ext = file.split('.')[1]
+        file_ext = file.split('.')[-1]
 
         if file_ext in ['xy', 'dat']:
             file_content, file_head = read_chi_to_df(file)
@@ -466,7 +486,8 @@ class BackgroundCorrection:
             file_content, file_head = read_spc_to_df(file)
             file_head = ["", "", "", file_head]
         else:
-            NotImplementedError(f"The used file type has not yet been implemented!")
+            warn(f"File type {file_ext} has not yet been implemented!")
+            return None, None
 
         return file_content, file_head
 
@@ -510,11 +531,16 @@ class BackgroundCorrection:
         """
 
         column = df[column_name]
-        baseline = Algorithms.algorithm(algorithm)(column.to_numpy())
 
-        intensity_corrected = np.array(column - baseline)
+        if do_correction:
+            baseline = Algorithms.algorithm(algorithm)(column.to_numpy())
 
-        if x_column_name is not None and norm_final:
+            intensity_corrected = np.array(column - baseline)
+        else:
+            intensity_corrected = np.array(column)
+            baseline = None
+
+        if x_column_name is not None and (norm_final or get_rois):
             # Norm intensities to area under intensity curve
             intensity_corrected_area = abs(np.trapz(y=intensity_corrected, x=df[x_column_name].to_numpy()))
             intensity_corrected_normed = intensity_corrected / intensity_corrected_area
@@ -608,7 +634,7 @@ class BackgroundCorrection:
 
             intensity = self.apply_wave_range(df, column_name, min_selection, max_selection)
 
-            if jar_correction:
+            if do_correction and jar_correction:
                 intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity, columns=["y"]),
                                                                             "y", pd.DataFrame())
                 # Calculate area underneath intensity curve in (jar) scaling range
@@ -627,12 +653,12 @@ class BackgroundCorrection:
             output_df, baseline_diff, unscaled_corrected = self.add_baseline_diff(data, data.columns[1],
                                                                                   output_df, data.columns[0])
 
-            baseline = pd.DataFrame()
-            baseline['baseline'] = baseline_diff
-
-            baseline = baseline.set_index(x_column_selection)
-            intensity = pd.DataFrame(intensity).set_index(x_column_selection)
-            unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
+            # baseline = pd.DataFrame()
+            # baseline['baseline'] = baseline_diff
+            #
+            # baseline = baseline.set_index(x_column_selection)
+            # intensity = pd.DataFrame(intensity).set_index(x_column_selection)
+            # unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
 
             # if plot_data:  # will plot every set of data if this option is enabled
             #    try:
@@ -649,14 +675,13 @@ class BackgroundCorrection:
             #    except KeyError:
             #        print(f'[{current_file}] failed plotting')
 
-        WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
+        if do_correction:
+            WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
 
         if get_rois:
             return self.get_roi_area(output_df, x_column_name, roi_start=roi_start, roi_stop=roi_stop)
         else:
             return None
-
-
 
 
 if __name__ == '__main__':
