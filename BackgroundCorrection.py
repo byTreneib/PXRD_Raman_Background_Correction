@@ -91,7 +91,7 @@ wave_max = 12.41
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
-do_correction = True
+do_correction = False
 algorithm = 1
 
 # Parameters for the baseline algorithm
@@ -435,6 +435,7 @@ class BackgroundCorrection:
                 values = data[:, 1].astype(np.float64)
                 plt.scatter(range(1, len(values) + 1), values)
                 plt.savefig(file_dir + "\\rois_plot.png")
+                plt.close()
 
     def read_files(self):
         data_frames = []
