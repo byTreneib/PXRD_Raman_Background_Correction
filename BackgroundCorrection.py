@@ -103,6 +103,7 @@ baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smalle
 get_rois = True
 roi_start = 0.82
 roi_stop = 0.87
+time_step = 1
 
 # List of file types that will be available in the file input prompt
 readfile_ui_file_types = [("xy files", "*.xy"),
@@ -393,8 +394,7 @@ class Algorithms:
 
 
 class BackgroundCorrection:
-    readfile_options = {'initialdir': getcwd(),
-                        'filetypes': readfile_ui_file_types}
+    readfile_options = {'filetypes': readfile_ui_file_types}
 
     def __init__(self):
         sanitize_test_row_index()
@@ -402,9 +402,9 @@ class BackgroundCorrection:
         data_frames, files, heads = self.read_files()
         heads = self.extend_headers(heads)
 
-        roi_areas_per_dict = {}
+        data_per_subdir = {}
         for df, filename, head in zip(data_frames, files, heads):
-            roi_area = self.process_data(df, filename, head)
+            out_df, roi_area = self.process_data(df, filename, head)
 
             # if get_rois:
             #     if roi_areas is None:
@@ -414,12 +414,12 @@ class BackgroundCorrection:
 
             file_dir = os.path.dirname(filename)
 
-            if file_dir in roi_areas_per_dict.keys():
-                roi_areas_per_dict[file_dir][0].append(os.path.basename(filename))
-                roi_areas_per_dict[file_dir][1].append(roi_area)
-
+            if file_dir in data_per_subdir.keys():
+                data_per_subdir[file_dir][0].append(os.path.basename(filename))
+                data_per_subdir[file_dir][1].append(out_df)
+                data_per_subdir[file_dir][2].append(roi_area)
             else:
-                roi_areas_per_dict[file_dir] = ([os.path.basename(filename)], [roi_area])
+                data_per_subdir[file_dir] = ([os.path.basename(filename)], [out_df], [roi_area])
 
         # if get_rois:
         #     plt.scatter(range(1, len(roi_areas)+1), roi_areas)
@@ -427,15 +427,58 @@ class BackgroundCorrection:
 
         # TODO: Proper x-Scale for ROI values?
         if get_rois:
-            print(roi_areas_per_dict)
-            for file_dir, roi_areas in roi_areas_per_dict.items():
+            root = Tk()
+            show_plot = askyesno(title="Plotting", message="Would you like to create a plot with corrected intensity and ROI integration values?")
+            root.destroy()
+
+            for file_dir, roi_areas in data_per_subdir.items():
                 data = np.array(roi_areas).T
                 np.savetxt(file_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
 
-                values = data[:, 1].astype(np.float64)
-                plt.scatter(range(1, len(values) + 1), values)
-                plt.savefig(file_dir + "\\rois_plot.png")
-                plt.close()
+                if show_plot:
+                    intensity_dfs = data[:, 1]
+                    roi_values = data[:, 2].astype(np.float64)
+
+                    first_df = intensity_dfs[0]
+                    x_scale = first_df[first_df.columns[0]]
+                    joined_df = pd.DataFrame(x_scale)
+                    joined_df.reset_index(drop=True, inplace=True)
+
+                    # Join intensity dataframes
+                    for df in intensity_dfs:
+                        df.reset_index(drop=True, inplace=True)
+                        for col in df.to_numpy()[:, 1:].T:
+                            joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
+
+                    # x_ticks = (np.arange(len(first_df.index)), list(x_scale)[::5])
+                    # y_ticks = (np.arange(len(joined_df.columns)), list(np.arange(0, len(joined_df.columns)-1, np.floor(len(joined_df.columns) - 1) / 5) * time_step))
+
+                    y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
+                    extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
+
+                    fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
+                    ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent)
+                    # ax1.set_xticks(*x_ticks)
+                    # ax1.set_yticks(*y_ticks)
+                    ax1.set_xlabel("q [A^(-1)]")
+                    ax1.set_ylabel("Time [s]")
+                    ax1.set_xlim(extent[0], extent[1])
+                    ax1.set_ylim(extent[2], extent[3])
+                    ax1.set_aspect("auto")
+
+                    ax2.scatter(roi_values, np.arange(len(roi_values)) * time_step, s=5)
+                    ax2.tick_params(
+                        axis='y',
+                        which="both",
+                        left=False,
+                        right=False,
+                        labelleft=False
+                    )
+                    ax2.set_xlabel("Norm. Intensity")
+
+                    fig.tight_layout()
+                    fig.savefig(file_dir + "\\rois_plot.png")
+                    # fig.close()
 
     def read_files(self):
         data_frames = []
@@ -585,9 +628,9 @@ class BackgroundCorrection:
         return jar_data, jar_corrected_ranged_x, jar_corrected_ranged_area, jar_min_selection, jar_max_selection
 
     @timeit
-    def get_roi_area(self, df: pd.DataFrame, x_column_name: str, roi_start: float, roi_stop: float):
-        min_selection = df[x_column_name] >= roi_start
-        max_selection = df[x_column_name] <= roi_stop
+    def get_roi_area(self, df: pd.DataFrame, x_column_name: str, roi_min: float, roi_max: float):
+        min_selection = df[x_column_name] >= roi_min
+        max_selection = df[x_column_name] <= roi_max
 
         roi_selection = df.loc[min_selection & max_selection]
         roi_x = roi_selection.loc[:, df.columns == x_column_name]
@@ -680,9 +723,9 @@ class BackgroundCorrection:
             WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
 
         if get_rois:
-            return self.get_roi_area(output_df, x_column_name, roi_start=roi_start, roi_stop=roi_stop)
+            return output_df, self.get_roi_area(output_df, x_column_name, roi_min=roi_start, roi_max=roi_stop)
         else:
-            return None
+            return output_df, None
 
 
 if __name__ == '__main__':
