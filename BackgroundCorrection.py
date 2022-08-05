@@ -91,7 +91,7 @@ wave_max = 12.41
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
-do_correction = False
+do_correction = True
 algorithm = 1
 
 # Parameters for the baseline algorithm
@@ -457,7 +457,7 @@ class BackgroundCorrection:
                     extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
                     fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
-                    ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent)
+                    ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
                     # ax1.set_xticks(*x_ticks)
                     # ax1.set_yticks(*y_ticks)
                     ax1.set_xlabel("q [A^(-1)]")
@@ -633,8 +633,8 @@ class BackgroundCorrection:
         max_selection = df[x_column_name] <= roi_max
 
         roi_selection = df.loc[min_selection & max_selection]
-        roi_x = roi_selection.loc[:, df.columns == x_column_name]
-        roi_y = roi_selection.loc[:, df.columns != x_column_name]
+        roi_x = roi_selection.loc[:, roi_selection.columns == x_column_name]
+        roi_y = roi_selection.loc[:, roi_selection.columns != x_column_name]
 
         y_sum = roi_y.sum(axis='columns').to_numpy()
         y_area = np.trapz(x=roi_x.to_numpy().T[0], y=y_sum)
@@ -720,7 +720,16 @@ class BackgroundCorrection:
             #        print(f'[{current_file}] failed plotting')
 
         if do_correction:
-            WriteDFToFile(output_df, current_file[:-4] + '.dat', head=head, sep=dat_file_separator)
+            out_file = current_file[:-4] + '.dat'
+            out_filename = os.path.basename(out_file)
+            out_dir = os.path.dirname(out_file)
+            out_dir = os.path.join(out_dir, "out")
+            out_file = os.path.join(out_dir, out_filename)
+
+            if not os.path.exists(out_dir):
+                os.mkdir(out_dir)
+
+            WriteDFToFile(output_df, out_file, head=head, sep=dat_file_separator)
 
         if get_rois:
             return output_df, self.get_roi_area(output_df, x_column_name, roi_min=roi_start, roi_max=roi_stop)
