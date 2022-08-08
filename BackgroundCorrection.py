@@ -91,7 +91,7 @@ wave_max = 12.41
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
-do_correction = True
+do_correction = False
 algorithm = 1
 
 # Parameters for the baseline algorithm
@@ -102,8 +102,10 @@ baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smalle
 # Peak ROI Selection
 # WARNING: This option currently only generates expected behaviour for input files with one y column!
 get_rois = True
-roi_start = 1.8
-roi_stop = 2
+roi_ranges = [
+    (0.5, 0.9),
+    (1.8, 2),
+]
 time_step = 1
 
 # List of file types that will be available in the file input prompt
@@ -140,6 +142,10 @@ def sanitize_test_row_index():
         test_row_index = int(test_row_index)
     except ValueError:
         raise ValueError("Test row index could not be converted to int. Make sure to use a valid column index.")
+
+
+def range_to_io_string(start, stop):
+    return f"{str(start).replace('.', '_')}_to_{str(stop).replace('.', '_')}"
 
 
 ############### BEGIN OF IO CLASSES ###############
@@ -405,16 +411,16 @@ class BackgroundCorrection:
 
         data_per_subdir = {}
         for df, filename, head in zip(data_frames, files, heads):
-            out_df, roi_area = self.process_data(df, filename, head)
+            out_df, roi_areas = self.process_data(df, filename, head)
 
             file_dir = os.path.dirname(filename)
 
             if file_dir in data_per_subdir.keys():
                 data_per_subdir[file_dir][0].append(os.path.basename(filename))
                 data_per_subdir[file_dir][1].append(out_df)
-                data_per_subdir[file_dir][2].append(roi_area)
+                data_per_subdir[file_dir][2].append(roi_areas)
             else:
-                data_per_subdir[file_dir] = ([os.path.basename(filename)], [out_df], [roi_area])
+                data_per_subdir[file_dir] = ([os.path.basename(filename)], [out_df], [roi_areas])
 
         if get_rois:
             self.export_rois(data_per_subdir)
@@ -431,11 +437,14 @@ class BackgroundCorrection:
                 os.mkdir(out_dir)
 
             data = np.array(roi_areas).T
-            np.savetxt(out_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
+
+            export_data = np.array([data[:, 0], *np.array([*data[:, 2]]).T]).T
+            header = ",".join(["filename", *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop) in enumerate(roi_ranges)]])
+            np.savetxt(out_dir + f"\\rois.csv", export_data, delimiter=",", fmt="%s", header=header, comments="")
 
             if show_plot:
                 intensity_dfs = data[:, 1]
-                roi_values = data[:, 2].astype(np.float64)
+                roi_area_values = np.array([*data[:, 2]]).astype(np.float64)
 
                 first_df = intensity_dfs[0]
                 x_scale = first_df[first_df.columns[0]]
@@ -459,7 +468,10 @@ class BackgroundCorrection:
                 ax1.set_ylim(extent[2], extent[3])
                 ax1.set_aspect("auto")
 
-                ax2.scatter(roi_values, np.flip(np.arange(len(roi_values)) * time_step), s=5)
+                for roi_area in roi_area_values.T:
+                    y_scale = np.flip(np.arange(len(roi_area)) * time_step)
+
+                    ax2.scatter(roi_area, y_scale, s=5)
                 ax2.tick_params(
                     axis='y',
                     which="both",
@@ -484,7 +496,7 @@ class BackgroundCorrection:
             files = []
             # No files selected -> Ask for directory
             files_dir = askdirectory()
-            files_subdirs = [subdir.path for subdir in os.scandir(files_dir) if subdir.is_dir()]
+            files_subdirs = [subdir.path for subdir in os.scandir(files_dir) if subdir.is_dir() and subdir.name != "out"]
             subdir_files = [[file.path for file in os.scandir(subdir) if os.path.isfile(file)] for subdir in
                             [*files_subdirs, files_dir]]
 
@@ -632,6 +644,10 @@ class BackgroundCorrection:
         y_sum = roi_y.sum(axis='columns').to_numpy()
         y_area = np.trapz(x=roi_x.to_numpy().T[0], y=y_sum)
 
+        # TODO: How handle multi-column files?
+        # y_sum = roi_y.to_numpy()
+        # y_area = np.trapz(x=roi_x.to_numpy().T[0], y=y_sum, axis=2)
+
         current_sum = 0
         # y_area = []
         # for y_sum_val in y_sum:
@@ -725,7 +741,8 @@ class BackgroundCorrection:
             WriteDFToFile(output_df, out_file, head=head, sep=dat_file_separator)
 
         if get_rois:
-            return output_df, self.get_roi_area(output_df, x_column_name, roi_min=roi_start, roi_max=roi_stop)
+            roi_areas = [self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in roi_ranges]
+            return output_df, roi_areas
         else:
             return output_df, None
 
