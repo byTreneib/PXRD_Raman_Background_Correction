@@ -407,12 +407,6 @@ class BackgroundCorrection:
         for df, filename, head in zip(data_frames, files, heads):
             out_df, roi_area = self.process_data(df, filename, head)
 
-            # if get_rois:
-            #     if roi_areas is None:
-            #         roi_x, roi_y = roi_area
-            #         roi_areas = pd.DataFrame(roi_area[0])
-            #     roi_areas[filename] = roi_area[1]
-
             file_dir = os.path.dirname(filename)
 
             if file_dir in data_per_subdir.keys():
@@ -431,8 +425,13 @@ class BackgroundCorrection:
         root.destroy()
 
         for file_dir, roi_areas in data_per_subdir.items():
+            out_dir = os.path.join(file_dir, "out")
+
+            if not os.path.exists(out_dir):
+                os.mkdir(out_dir)
+
             data = np.array(roi_areas).T
-            np.savetxt(file_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
+            np.savetxt(out_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
 
             if show_plot:
                 intensity_dfs = data[:, 1]
@@ -449,16 +448,11 @@ class BackgroundCorrection:
                     for col in df.to_numpy()[:, 1:].T:
                         joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
 
-                # x_ticks = (np.arange(len(first_df.index)), list(x_scale)[::5])
-                # y_ticks = (np.arange(len(joined_df.columns)), list(np.arange(0, len(joined_df.columns)-1, np.floor(len(joined_df.columns) - 1) / 5) * time_step))
-
                 y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
                 extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
                 fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
                 ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
-                # ax1.set_xticks(*x_ticks)
-                # ax1.set_yticks(*y_ticks)
                 ax1.set_xlabel("q [A^(-1)]")
                 ax1.set_ylabel("Time [s]")
                 ax1.set_xlim(extent[0], extent[1])
@@ -476,7 +470,7 @@ class BackgroundCorrection:
                 ax2.set_xlabel("Norm. Intensity")
 
                 fig.tight_layout()
-                fig.savefig(file_dir + "\\rois_plot.png")
+                fig.savefig(out_dir + "\\rois_plot.png")
                 # fig.close()
 
     def read_files(self):
