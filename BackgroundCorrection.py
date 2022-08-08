@@ -100,9 +100,10 @@ baseline_lambda = 500  # the larger lambda is, the smoother the resulting backgr
 baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
 
 # Peak ROI Selection
+# WARNING: This option currently only generates expected behaviour for input files with one y column!
 get_rois = True
-roi_start = 0.82
-roi_stop = 0.87
+roi_start = 1.8
+roi_stop = 2
 time_step = 1
 
 # List of file types that will be available in the file input prompt
@@ -421,64 +422,62 @@ class BackgroundCorrection:
             else:
                 data_per_subdir[file_dir] = ([os.path.basename(filename)], [out_df], [roi_area])
 
-        # if get_rois:
-        #     plt.scatter(range(1, len(roi_areas)+1), roi_areas)
-        #     plt.show()
-
-        # TODO: Proper x-Scale for ROI values?
         if get_rois:
-            root = Tk()
-            show_plot = askyesno(title="Plotting", message="Would you like to create a plot with corrected intensity and ROI integration values?")
-            root.destroy()
+            self.export_rois(data_per_subdir)
 
-            for file_dir, roi_areas in data_per_subdir.items():
-                data = np.array(roi_areas).T
-                np.savetxt(file_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
+    def export_rois(self, data_per_subdir):
+        root = Tk()
+        show_plot = askyesno(title="Plotting", message="Would you like to create a plot with corrected intensity and ROI integration values?")
+        root.destroy()
 
-                if show_plot:
-                    intensity_dfs = data[:, 1]
-                    roi_values = data[:, 2].astype(np.float64)
+        for file_dir, roi_areas in data_per_subdir.items():
+            data = np.array(roi_areas).T
+            np.savetxt(file_dir + "\\rois.csv", data, delimiter=",", fmt="%s")
 
-                    first_df = intensity_dfs[0]
-                    x_scale = first_df[first_df.columns[0]]
-                    joined_df = pd.DataFrame(x_scale)
-                    joined_df.reset_index(drop=True, inplace=True)
+            if show_plot:
+                intensity_dfs = data[:, 1]
+                roi_values = data[:, 2].astype(np.float64)
 
-                    # Join intensity dataframes
-                    for df in intensity_dfs:
-                        df.reset_index(drop=True, inplace=True)
-                        for col in df.to_numpy()[:, 1:].T:
-                            joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
+                first_df = intensity_dfs[0]
+                x_scale = first_df[first_df.columns[0]]
+                joined_df = pd.DataFrame(x_scale)
+                joined_df.reset_index(drop=True, inplace=True)
 
-                    # x_ticks = (np.arange(len(first_df.index)), list(x_scale)[::5])
-                    # y_ticks = (np.arange(len(joined_df.columns)), list(np.arange(0, len(joined_df.columns)-1, np.floor(len(joined_df.columns) - 1) / 5) * time_step))
+                # Join intensity dataframes
+                for df in intensity_dfs:
+                    df.reset_index(drop=True, inplace=True)
+                    for col in df.to_numpy()[:, 1:].T:
+                        joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
 
-                    y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
-                    extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
+                # x_ticks = (np.arange(len(first_df.index)), list(x_scale)[::5])
+                # y_ticks = (np.arange(len(joined_df.columns)), list(np.arange(0, len(joined_df.columns)-1, np.floor(len(joined_df.columns) - 1) / 5) * time_step))
 
-                    fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
-                    ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
-                    # ax1.set_xticks(*x_ticks)
-                    # ax1.set_yticks(*y_ticks)
-                    ax1.set_xlabel("q [A^(-1)]")
-                    ax1.set_ylabel("Time [s]")
-                    ax1.set_xlim(extent[0], extent[1])
-                    ax1.set_ylim(extent[2], extent[3])
-                    ax1.set_aspect("auto")
+                y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
+                extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
-                    ax2.scatter(roi_values, np.arange(len(roi_values)) * time_step, s=5)
-                    ax2.tick_params(
-                        axis='y',
-                        which="both",
-                        left=False,
-                        right=False,
-                        labelleft=False
-                    )
-                    ax2.set_xlabel("Norm. Intensity")
+                fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
+                ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
+                # ax1.set_xticks(*x_ticks)
+                # ax1.set_yticks(*y_ticks)
+                ax1.set_xlabel("q [A^(-1)]")
+                ax1.set_ylabel("Time [s]")
+                ax1.set_xlim(extent[0], extent[1])
+                ax1.set_ylim(extent[2], extent[3])
+                ax1.set_aspect("auto")
 
-                    fig.tight_layout()
-                    fig.savefig(file_dir + "\\rois_plot.png")
-                    # fig.close()
+                ax2.scatter(roi_values, np.flip(np.arange(len(roi_values)) * time_step), s=5)
+                ax2.tick_params(
+                    axis='y',
+                    which="both",
+                    left=False,
+                    right=False,
+                    labelleft=False
+                )
+                ax2.set_xlabel("Norm. Intensity")
+
+                fig.tight_layout()
+                fig.savefig(file_dir + "\\rois_plot.png")
+                # fig.close()
 
     def read_files(self):
         data_frames = []
