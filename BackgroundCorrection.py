@@ -154,33 +154,27 @@ def range_to_io_string(start, stop):
     return f"{str(start).replace('.', '_')}_to_{str(stop).replace('.', '_')}"
 
 
-@timeit
 def deg_to_rad(val: float) -> float:
     return (2 * np.pi / 360) * val
 
 
-@timeit
 def rad_to_deg(val: float) -> float:
     return val / (2 * np.pi / 360)
 
 
-@timeit
 def q_nm_to_q_A(val: float) -> float:
     return val / 10
 
 
-@timeit
 def q_A_to_q_nm(val: float) -> float:
     return val * 10
 
 
-@timeit
 def two_theta_to_q_A(val: float) -> float:
     val_rad = deg_to_rad(val)
     return (4 * np.pi * np.sin(val_rad/2)) / lam
 
 
-@timeit
 def q_A_to_two_theta(val: float) -> float:
     ret_rad = 2 * np.arcsin(lam * val / (4 * np.pi))
     return rad_to_deg(ret_rad)
