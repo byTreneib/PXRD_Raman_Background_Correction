@@ -83,8 +83,6 @@ jar_scaling_range = (0, -1)  # Set range as (start_value, end_value), e.g. (0, 1
 norm_final = True
 
 # Minimum and maximum value for the x column
-# wave_min = 180
-# wave_max = 3395
 wave_min = 0.51
 wave_max = 12.41
 
@@ -107,6 +105,14 @@ roi_ranges = [
     (1.8, 2),
 ]
 time_step = 1
+
+# Select Unit for x-Scale, where x_scale_output_unit is the unit you want the data in, and x_scale_input_unit is the unit the input data is in
+# 0 -> q_nm
+# 1 -> q_A
+# 2 -> 2Theta
+x_scale_output_unit = 1
+x_scale_input_unit = 0
+lam = 0.207
 
 # List of file types that will be available in the file input prompt
 readfile_ui_file_types = [("xy files", "*.xy"),
@@ -146,6 +152,61 @@ def sanitize_test_row_index():
 
 def range_to_io_string(start, stop):
     return f"{str(start).replace('.', '_')}_to_{str(stop).replace('.', '_')}"
+
+
+@timeit
+def deg_to_rad(val: float) -> float:
+    return (2 * np.pi / 360) * val
+
+
+@timeit
+def rad_to_deg(val: float) -> float:
+    return val / (2 * np.pi / 360)
+
+
+@timeit
+def q_nm_to_q_A(val: float) -> float:
+    return val / 10
+
+
+@timeit
+def q_A_to_q_nm(val: float) -> float:
+    return val * 10
+
+
+@timeit
+def two_theta_to_q_A(val: float) -> float:
+    val_rad = deg_to_rad(val)
+    return (4 * np.pi * np.sin(val_rad/2)) / lam
+
+
+@timeit
+def q_A_to_two_theta(val: float) -> float:
+    ret_rad = 2 * np.arcsin(lam * val / (4 * np.pi))
+    return rad_to_deg(ret_rad)
+
+
+def convert_x(val: float, from_unit: int, to_unit: int) -> float:
+    try:
+        if int(from_unit) == int(to_unit):
+            return val
+    except ValueError:
+        raise ValueError("from_unit and to_unit must be of type Integer!")
+
+    to_q_A = [q_nm_to_q_A, lambda x: x, two_theta_to_q_A]
+    from_q_A = [q_A_to_q_nm, lambda x: x, q_A_to_two_theta]
+
+    to_q_A_func = to_q_A[from_unit]
+    from_q_A_func = from_q_A[to_unit]
+
+    q_A_val = to_q_A_func(val)
+    return from_q_A_func(q_A_val)
+
+
+def unit_x_str(to_unit: int) -> str:
+    unit_strs = ["q [1/nm]", "q [1/A]", "q [2θ]"]
+
+    return unit_strs[to_unit]
 
 
 ############### BEGIN OF IO CLASSES ###############
@@ -447,7 +508,11 @@ class BackgroundCorrection:
                 roi_area_values = np.array([*data[:, 2]]).astype(np.float64)
 
                 first_df = intensity_dfs[0]
-                x_scale = first_df[first_df.columns[0]]
+
+                x_scale_orig = first_df[first_df.columns[0]]
+                # x_scale = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_scale_orig, x_scale_input_unit, x_scale_target_unit)
+                x_scale = [convert_x(elem, x_scale_input_unit, x_scale_output_unit) for elem in x_scale_orig]
+
                 joined_df = pd.DataFrame(x_scale)
                 joined_df.reset_index(drop=True, inplace=True)
 
@@ -462,14 +527,15 @@ class BackgroundCorrection:
 
                 fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
                 ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
-                ax1.set_xlabel("q [A^(-1)]")
+                ax1.set_xlabel(unit_x_str(x_scale_output_unit))
                 ax1.set_ylabel("Time [s]")
                 ax1.set_xlim(extent[0], extent[1])
                 ax1.set_ylim(extent[2], extent[3])
                 ax1.set_aspect("auto")
+                ax1.invert_yaxis()
 
                 for roi_area in roi_area_values.T:
-                    y_scale = np.flip(np.arange(len(roi_area)) * time_step)
+                    y_scale = np.arange(len(roi_area)) * time_step
 
                     ax2.scatter(roi_area, y_scale, s=5)
                 ax2.tick_params(
