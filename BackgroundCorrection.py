@@ -504,8 +504,8 @@ class BackgroundCorrection:
                 first_df = intensity_dfs[0]
 
                 x_scale_orig = first_df[first_df.columns[0]]
-                # x_scale = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_scale_orig, x_scale_input_unit, x_scale_target_unit)
-                x_scale = [convert_x(elem, x_scale_input_unit, x_scale_output_unit) for elem in x_scale_orig]
+                # x_scale = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_scale_orig, x_scale_input_unit, x_scale_output_unit)
+                x_scale = x_scale_orig
 
                 joined_df = pd.DataFrame(x_scale)
                 joined_df.reset_index(drop=True, inplace=True)
@@ -520,7 +520,7 @@ class BackgroundCorrection:
                 extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
                 fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
-                ax1.imshow(joined_df.fillna(0).to_numpy()[:, 1:].T, extent=extent, cmap="hot")
+                ax1.imshow(np.flip(joined_df.fillna(0).to_numpy()[:, 1:].T, axis=0), extent=extent, cmap="hot")
                 ax1.set_xlabel(unit_x_str(x_scale_output_unit))
                 ax1.set_ylabel("Time [s]")
                 ax1.set_xlim(extent[0], extent[1])
@@ -730,7 +730,7 @@ class BackgroundCorrection:
         x_column_selection, min_selection, max_selection = self.apply_wave_range(df, x_column_name)
 
         output_df = pd.DataFrame()
-        output_df[x_column_name] = x_column_selection
+        output_df[x_column_name] = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_column_selection, x_scale_input_unit, x_scale_output_unit)
 
         if jar_correction:
             jar_data, jar_corrected_ranged_x, jar_corrected_ranged_area, jar_min_selection, jar_max_selection = \
