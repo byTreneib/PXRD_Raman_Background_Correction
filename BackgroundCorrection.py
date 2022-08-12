@@ -105,6 +105,7 @@ roi_ranges = [
     (1.8, 2),
 ]
 time_step = 1
+plot_flip_y = True
 
 # Select Unit for x-Scale, where x_scale_output_unit is the unit you want the data in, and x_scale_input_unit is the unit the input data is in
 # 0 -> q_nm
@@ -526,12 +527,16 @@ class BackgroundCorrection:
                 ax1.set_xlim(extent[0], extent[1])
                 ax1.set_ylim(extent[2], extent[3])
                 ax1.set_aspect("auto")
-                ax1.invert_yaxis()
+                if plot_flip_y:
+                    ax1.invert_yaxis()
 
                 for roi_area in roi_area_values.T:
                     y_scale = np.arange(len(roi_area)) * time_step
 
-                    ax2.scatter(roi_area, y_scale, s=5)
+                    if plot_flip_y:
+                        ax2.scatter(roi_area, y_scale, s=5)
+                    else:
+                        ax2.scatter(roi_area[::-1], y_scale, s=5)
                 ax2.tick_params(
                     axis='y',
                     which="both",
