@@ -101,9 +101,10 @@ baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smalle
 # WARNING: This option currently only generates expected behaviour for input files with one y column!
 get_rois = True
 roi_ranges = [
-    (0.5, 0.9),
-    (1.8, 2),
+    (0.72, 0.73),
+    (0.75, 0.76),
 ]
+normalize_integration = True
 time_step = 1
 plot_flip_y = True
 
@@ -112,7 +113,7 @@ plot_flip_y = True
 # 1 -> q_A
 # 2 -> 2Theta
 x_scale_output_unit = 1
-x_scale_input_unit = 0
+x_scale_input_unit = 1
 lam = 0.207
 
 # List of file types that will be available in the file input prompt
@@ -500,7 +501,7 @@ class BackgroundCorrection:
 
             if show_plot:
                 intensity_dfs = data[:, 1]
-                roi_area_values = np.array([*data[:, 2]]).astype(np.float64)
+                roi_area_values = np.array([*data[:, 2]]).astype(np.float16)
 
                 first_df = intensity_dfs[0]
 
@@ -514,23 +515,27 @@ class BackgroundCorrection:
                 # Join intensity dataframes
                 for df in intensity_dfs:
                     df.reset_index(drop=True, inplace=True)
-                    for col in df.to_numpy()[:, 1:].T:
+                    for col in np.flip(df.to_numpy()[:, 1:].T):
                         joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
 
                 y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
                 extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
+                joined_df = joined_df.astype(float)
+
                 fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
-                ax1.imshow(np.flip(joined_df.fillna(0).to_numpy()[:, 1:].T, axis=0), extent=extent, cmap="hot")
+                ax1.imshow(joined_df.to_numpy()[:, 1:].T, extent=extent, cmap="hot")
                 ax1.set_xlabel(unit_x_str(x_scale_output_unit))
                 ax1.set_ylabel("Time [s]")
                 ax1.set_xlim(extent[0], extent[1])
                 ax1.set_ylim(extent[2], extent[3])
                 ax1.set_aspect("auto")
-                if plot_flip_y:
-                    ax1.invert_yaxis()
+                ax1.invert_yaxis()
 
-                for roi_area in roi_area_values.T:
+                roi_area_values_grounded = (roi_area_values - np.min(roi_area_values))
+                roi_area_values_normalized = roi_area_values_grounded / np.max(roi_area_values_grounded)
+
+                for roi_area in roi_area_values_normalized.T:
                     y_scale = np.arange(len(roi_area)) * time_step
 
                     if plot_flip_y:
@@ -548,7 +553,7 @@ class BackgroundCorrection:
 
                 fig.tight_layout()
                 fig.savefig(out_dir + "\\rois_plot.png")
-                # fig.close()
+                plt.close(fig)
 
     def read_files(self):
         data_frames = []
@@ -806,7 +811,8 @@ class BackgroundCorrection:
             WriteDFToFile(output_df, out_file, head=head, sep=dat_file_separator)
 
         if get_rois:
-            roi_areas = [self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in roi_ranges]
+            roi_areas = np.array([self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in roi_ranges])
+
             return output_df, roi_areas
         else:
             return output_df, None
