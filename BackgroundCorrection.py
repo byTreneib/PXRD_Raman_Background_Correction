@@ -71,6 +71,7 @@ plot_data = True
 
 dat_file_separator = '\t'  # Separator (as string), that will be used to separate the values when writing to .dat file
 include_header = True  # When true, will read the headers of the input files, and extend them with the parameters
+header_row_count = 4  # DEFAULT: 4
 
 # When jar_correction is set to True the user will be asked to provide a file containing reference intensities for the
 # jar in a second prompt. The program will then scale the reference intensities within the provided jar_scaling_range
@@ -298,7 +299,7 @@ class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
     def file_content_to_df(self):
         lines_raw = self.file_content.split("\n")  # splits up lines and removes the header
         if self.include_head:
-            lines = list(map(lambda x: x.split(), lines_raw[4:-1]))  # splits up the columns of each line
+            lines = list(map(lambda x: x.split(), lines_raw[header_row_count:-1]))  # splits up the columns of each line
         else:
             lines = list(map(lambda x: x.split(), lines_raw[:-1]))  # splits up the columns of each line
 
@@ -309,7 +310,7 @@ class ReadChiToDF:  # class for reading chi file into a pandas DataFrame
         content_df['q'] = x_column  # writes x_column list into 'q' column
         content_df[self.i_column_name] = y_column  # writes y_column list into 'I' (or whatever was specified) column
 
-        return content_df, lines_raw[:4]  # returns the dataframe and the first 4 lines (head)
+        return content_df, lines_raw[:header_row_count]  # returns the dataframe and the first 4 lines (head)
 
 
 def read_raman_to_df(filename: str, header=True):
