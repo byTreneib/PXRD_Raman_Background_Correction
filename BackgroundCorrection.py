@@ -71,26 +71,27 @@ plot_data = True
 
 dat_file_separator = '\t'  # Separator (as string), that will be used to separate the values when writing to .dat file
 include_header = True  # When true, will read the headers of the input files, and extend them with the parameters
-header_row_count = 4  # DEFAULT: 4
+header_row_count = 23  # DEFAULT: 4
 
 # When jar_correction is set to True the user will be asked to provide a file containing reference intensities for the
 # jar in a second prompt. The program will then scale the reference intensities within the provided jar_scaling_range
 # and subtract the reference intensities from the scan data.
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
-jar_correction = False
-jar_scaling_range = (0, -1)  # Set range as (start_value, end_value), e.g. (0, 100)
+jar_correction = True
+jar_scaling_range = (-np.infty, np.infty)  # Set range as (start_value, end_value), e.g. (0, 100)
+jar_debug = False
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
 norm_final = True
 
 # Minimum and maximum value for the x column
-wave_min = 0.51
-wave_max = 12.41
+wave_min = -np.infty
+wave_max = np.infty
 
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
-do_correction = False
+do_correction = True
 algorithm = 1
 
 # Parameters for the baseline algorithm
@@ -394,7 +395,7 @@ class Algorithms:
             WH = sp.sparse.csc_matrix(W + H)
             cholesky_matrix = cholesky(WH.todense())
             C = sparse.csc_matrix(cholesky_matrix)
-            fsolve = sparse.linalg.spsolve(C.T, w * y)
+            fsolve = sparse.linalg.spsolve(C.T, w * y.astype(np.float64))
             z = sparse.linalg.spsolve(C, fsolve)
             d = y - z
             dn = d[d < 0]
@@ -449,7 +450,7 @@ class Algorithms:
         for i in range(itermax):
             W = sparse.diags(w, 0, shape=(L, L))
             Z = W + lam * D.dot(D.T)
-            z = spsolve(Z, w * y)
+            z = spsolve(Z, w * y.astype(np.float64))
             w = ratio * (y > z) + (1 - ratio) * (y < z)
         return z
 
@@ -683,25 +684,21 @@ class BackgroundCorrection:
         # Read jar reference data and apply wave range
         jar_read = self.read_jar_reference()
         jar_data = pd.concat([x_column_selection, self.apply_wave_range(jar_read, jar_read.columns[1],
-                                                                        min_selection, max_selection)])
+                                                                        min_selection, max_selection)], axis=1)
 
         jar_x_column_name = jar_data.columns[0]
         jar_data_column_name = jar_data.columns[1]
 
         # Calculate baseline and subtract from intensity. Add to jar_data DataFrame
-        jar_intensity = jar_data[jar_data_column_name].to_numpy()
-        jar_baseline = Algorithms.arpls(jar_intensity[jar_data_column_name].to_numpy())
-        jar_corrected = jar_intensity - jar_baseline
-        jar_data["jar_corrected"] = jar_corrected
+        jar_intensity = jar_data[jar_data_column_name]
 
         # Apply user-selected range for jar peak to x and intensity arrays and calculate area underneath the curve
         jar_min_selection = jar_data[jar_x_column_name] >= jar_scaling_range[0]
         jar_max_selection = jar_data[jar_x_column_name] <= jar_scaling_range[1]
-        jar_corrected_ranged = jar_data["jar_corrected"].loc[(jar_min_selection & jar_max_selection)].to_numpy()
         jar_corrected_ranged_x = jar_data[jar_x_column_name].loc[(jar_min_selection & jar_max_selection)].to_numpy()
-        jar_corrected_ranged_area = np.trapz(y=jar_corrected_ranged, x=jar_corrected_ranged_x)
+        jar_corrected_ranged_area = np.trapz(y=jar_intensity, x=jar_corrected_ranged_x)
 
-        return jar_data, jar_corrected_ranged_x, jar_corrected_ranged_area, jar_min_selection, jar_max_selection
+        return jar_intensity, jar_min_selection, jar_max_selection
 
     @timeit
     def get_roi_area(self, df: pd.DataFrame, x_column_name: str, roi_min: float, roi_max: float):
@@ -744,8 +741,10 @@ class BackgroundCorrection:
         output_df[x_column_name] = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_column_selection, x_scale_input_unit, x_scale_output_unit)
 
         if jar_correction:
-            jar_data, jar_corrected_ranged_x, jar_corrected_ranged_area, jar_min_selection, jar_max_selection = \
+            jar_intensity, jar_min_selection, jar_max_selection = \
                 self.get_jar_reference(x_column_selection, min_selection, max_selection)
+            jar_min_selection.reset_index(drop=True, inplace=True)
+            jar_max_selection.reset_index(drop=True, inplace=True)
 
         for column_name in df.columns:
             if column_name == x_column_name:
@@ -759,17 +758,35 @@ class BackgroundCorrection:
             intensity = self.apply_wave_range(df, column_name, min_selection, max_selection)
 
             if do_correction and jar_correction:
-                intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity, columns=["y"]),
-                                                                            "y", pd.DataFrame())
-                # Calculate area underneath intensity curve in (jar) scaling range
-                data_ranged = intensity_baseline_corrected.loc[(jar_min_selection & jar_max_selection)].to_numpy()
-                data_ranged_area = np.trapz(y=data_ranged, x=jar_corrected_ranged_x)
+                intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity),
+                                                                            column_name, pd.DataFrame())
 
                 # Calculate scaling factor for jar curve and apply to jar curve
-                jar_scaled = (data_ranged_area / jar_corrected_ranged_area) * jar_data["jar_corrected"]
+                diff = jar_intensity / intensity.to_numpy()
+                max_diff_pos = np.argmax(diff)
+                factor = 1 / diff[max_diff_pos]
+                jar_scaled = factor * jar_intensity
+
+                if jar_debug:
+                    plt.plot(intensity, label="intensity")
 
                 # Subtract jar reference intensity from intensity
                 intensity = intensity - jar_scaled
+
+                # Correct intensity in case of minimal error due to machine inaccuracy
+                intensity_min = np.min(intensity)
+                if intensity_min < 0:
+                    intensity = intensity - intensity_min
+
+                if jar_debug:
+                    plt.plot(jar_intensity, label="jar (unscaled)")
+                    plt.plot(jar_scaled, label="jar (scaled)")
+                    plt.plot(intensity, label="jar-corrected intensity")
+                    plt.legend()
+                    plt.show()
+
+                    print("Jar scale factor:", factor)
+                    print("Min intensity", np.min(intensity))
 
             data = pd.concat([x_column_selection, intensity], axis='columns')
             data = data.reset_index(drop=True)
@@ -777,27 +794,27 @@ class BackgroundCorrection:
             output_df, baseline_diff, unscaled_corrected = self.add_baseline_diff(data, data.columns[1],
                                                                                   output_df, data.columns[0])
 
-            # baseline = pd.DataFrame()
-            # baseline['baseline'] = baseline_diff
-            #
-            # baseline = baseline.set_index(x_column_selection)
-            # intensity = pd.DataFrame(intensity).set_index(x_column_selection)
-            # unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
+            if plot_data:  # will plot every set of data if this option is enabled
+                baseline = pd.DataFrame()
+                baseline['baseline'] = baseline_diff
 
-            # if plot_data:  # will plot every set of data if this option is enabled
-            #    try:
-            #        plt.plot(intensity, color="blue", label="original")
-            #        plt.plot(baseline['baseline'], color="red", label="baseline")
-            #        plt.plot(unscaled, color="green", label="baseline corrected")
+                baseline = baseline.set_index(x_column_selection)
+                intensity = pd.DataFrame(intensity).set_index(x_column_selection)
+                unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
 
-            #        plt.xlabel(x_column_name)
-            #        plt.ylabel("intensity")
-            #        plt.legend(loc='upper right')
-            #        plt.title(column_name)
+                try:
+                   plt.plot(intensity, color="blue", label="original")
+                   plt.plot(baseline['baseline'], color="red", label="baseline")
+                   plt.plot(unscaled, color="green", label="baseline corrected")
 
-            #        plt.show()
-            #    except KeyError:
-            #        print(f'[{current_file}] failed plotting')
+                   plt.xlabel(x_column_name)
+                   plt.ylabel("intensity")
+                   plt.legend(loc='upper right')
+                   plt.title(column_name)
+
+                   plt.show()
+                except KeyError:
+                   print(f'[{current_file}] failed plotting')
 
         if do_correction:
             out_file = current_file[:-4] + '.dat'
