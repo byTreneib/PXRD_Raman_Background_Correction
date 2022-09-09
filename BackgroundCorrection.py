@@ -458,6 +458,10 @@ class Algorithms:
     def algorithm(alg_index: int):
         return [Algorithms.arpls, Algorithms.als][alg_index]
 
+    @staticmethod
+    def algorithm_name(alg_index: int):
+        return ["arpls", "als"][alg_index]
+
 
 class BackgroundCorrection:
     readfile_options = {'filetypes': readfile_ui_file_types}
@@ -632,7 +636,7 @@ class BackgroundCorrection:
         for index, head in enumerate(headers):
             header_extention_line2 = f", BackgroundCorrection.py (Version {__version__})"
             header_extention_line3 = f", Lambda = {baseline_lambda}, Ratio = {baseline_ratio}, " \
-                                     f"Itermax = {baseline_itermax}"
+                                     f"Itermax = {baseline_itermax}, algorithm = {Algorithms.algorithm_name(algorithm)}"
 
             head[1] += header_extention_line2
             head[2] += header_extention_line3
@@ -661,8 +665,8 @@ class BackgroundCorrection:
             intensity_corrected = np.array(column)
             baseline = None
 
-        if x_column_name is not None and (norm_final or get_rois):
-            # Norm intensities to area under intensity curve
+        if x_column_name is not None and (norm_final or get_rois) and not (do_correction and jar_correction):
+            # Norm intensities to area under intensity curve if requested and not done after jar correction
             intensity_corrected_area = abs(np.trapz(y=intensity_corrected, x=df[x_column_name].to_numpy()))
             intensity_corrected_normed = intensity_corrected / intensity_corrected_area
 
@@ -746,6 +750,9 @@ class BackgroundCorrection:
             jar_min_selection.reset_index(drop=True, inplace=True)
             jar_max_selection.reset_index(drop=True, inplace=True)
 
+        jar_df = pd.DataFrame()
+        jar_df[x_column_name] = x_column_selection
+
         for column_name in df.columns:
             if column_name == x_column_name:
                 continue
@@ -788,6 +795,13 @@ class BackgroundCorrection:
                     print("Jar scale factor:", factor)
                     print("Min intensity", np.min(intensity))
 
+                if norm_final:
+                    intensity_corrected_area = abs(np.trapz(y=intensity, x=x_column_selection.to_numpy()))
+                    intensity = intensity / intensity_corrected_area
+
+                # TODO: Export Jar-Corrected data
+                jar_df[column_name] = intensity.to_numpy()
+
             data = pd.concat([x_column_selection, intensity], axis='columns')
             data = data.reset_index(drop=True)
 
@@ -827,6 +841,17 @@ class BackgroundCorrection:
                 os.mkdir(out_dir)
 
             WriteDFToFile(output_df, out_file, head=head, sep=dat_file_separator)
+
+            if jar_correction:
+                jar_out_file = current_file[:-4] + '_jar.dat'
+                jar_out_filename = os.path.basename(jar_out_file)
+                jar_out_dir = os.path.join(out_dir, "jar")
+                jar_out_file = os.path.join(jar_out_dir, jar_out_filename)
+
+                if not os.path.exists(jar_out_dir):
+                    os.mkdir(jar_out_dir)
+
+                WriteDFToFile(jar_df, jar_out_file, head=head, sep=dat_file_separator)
 
         if get_rois:
             roi_areas = np.array([self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in roi_ranges])
