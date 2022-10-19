@@ -6,7 +6,7 @@ This source code is licensed under the license found in the
 LICENSE file in the root directory of this source tree.
 """
 
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 
 # backgroundCorrection_V0.9.5.py
 # https://github.com/byTreneib/BackgroundCorrection
@@ -63,7 +63,7 @@ import time
 
 # Select the index of the column a test run should be executed on. Leave empty ('' or "") if no testing is required.
 # If set, the Background will only run on this column to test the fit of the parameters chosen
-test_row_index = '10'
+test_row_index = '2'
 
 # Set to True to show every processed dataset in a plot.
 # ATTENTION: When running with this option turned on, execution will be paused while the plot is being displayed
@@ -71,15 +71,16 @@ plot_data = True
 
 dat_file_separator = '\t'  # Separator (as string), that will be used to separate the values when writing to .dat file
 include_header = True  # When true, will read the headers of the input files, and extend them with the parameters
-header_row_count = 23  # DEFAULT: 4
+header_row_count = 1  # DEFAULT: 4
 
 # When jar_correction is set to True the user will be asked to provide a file containing reference intensities for the
 # jar in a second prompt. The program will then scale the reference intensities within the provided jar_scaling_range
 # and subtract the reference intensities from the scan data.
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
 jar_correction = True
+bkg_before_jar = True
 jar_scaling_range = (-np.infty, np.infty)  # Set range as (start_value, end_value), e.g. (0, 100)
-jar_debug = False
+jar_debug = True
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
 norm_final = True
@@ -95,13 +96,13 @@ do_correction = True
 algorithm = 1
 
 # Parameters for the baseline algorithm
-baseline_itermax = 500  # number of iterations the algorithm will perform
-baseline_lambda = 500  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
-baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
+baseline_itermax = 100  # number of iterations the algorithm will perform
+baseline_lambda = 1E4  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
+baseline_ratio = 0.0001  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
 
 # Peak ROI Selection
 # WARNING: This option currently only generates expected behaviour for input files with one y column!
-get_rois = True
+get_rois = False
 roi_ranges = [
     (0.72, 0.73),
     (0.75, 0.76),
@@ -119,9 +120,9 @@ x_scale_input_unit = 1
 lam = 0.207
 
 # List of file types that will be available in the file input prompt
-readfile_ui_file_types = [("xy files", "*.xy"),
+readfile_ui_file_types = [("txt raman files", "*.txt"),
                           ("spc files", "*.spc"),
-                          ("txt raman files", "*.txt"),
+                          ("xy files", "*.xy"),
                           ("dat files", "*.dat"),
                           ("raman files", "*.raman")]
 
@@ -342,7 +343,7 @@ def read_spc_to_df(filename: str):
             out["RamanShift (cm-1)"] = x
             out[str(round(s.subtime))] = y
 
-    return out, "\t".join(map(str, out.columns))
+    return out.copy(), "\t".join(map(str, out.columns))
 
 
 ################ END OF IO CLASSES ################
@@ -617,7 +618,9 @@ class BackgroundCorrection:
         return file_content, file_head
 
     def read_jar_reference(self):
+        root = Tk()
         file = askopenfilename(**self.readfile_options, title='Select file with reference data')
+        root.destroy()
 
         file_ext = file.split('.')[1]
 
@@ -644,7 +647,7 @@ class BackgroundCorrection:
 
         return headers
 
-    def add_baseline_diff(self, df: pd.DataFrame, column_name: str, return_df: pd.DataFrame, x_column_name: str = None):
+    def add_baseline_diff(self, df: pd.DataFrame, column_name: str, return_df: pd.DataFrame, x_column_name: str = None, normalize: bool = True, skip_correction: bool = False):
         """
         Function for extending the return_df dataFrame with the processed values from waxs_df for a certain probe
 
@@ -657,7 +660,7 @@ class BackgroundCorrection:
 
         column = df[column_name]
 
-        if do_correction:
+        if do_correction and not skip_correction:
             baseline = Algorithms.algorithm(algorithm)(column.to_numpy())
 
             intensity_corrected = np.array(column - baseline)
@@ -665,12 +668,13 @@ class BackgroundCorrection:
             intensity_corrected = np.array(column)
             baseline = None
 
-        if x_column_name is not None and (norm_final or get_rois) and not (do_correction and jar_correction):
+        if x_column_name is not None and (norm_final or get_rois) and normalize:
             # Norm intensities to area under intensity curve if requested and not done after jar correction
             intensity_corrected_area = abs(np.trapz(y=intensity_corrected, x=df[x_column_name].to_numpy()))
             intensity_corrected_normed = intensity_corrected / intensity_corrected_area
 
             return_df[column_name] = intensity_corrected_normed  # add difference to return df
+            intensity_corrected = intensity_corrected_normed
         else:
             return_df[column_name] = intensity_corrected
 
@@ -764,9 +768,22 @@ class BackgroundCorrection:
 
             intensity = self.apply_wave_range(df, column_name, min_selection, max_selection)
 
+            original_data = intensity
+
+            if do_correction and bkg_before_jar:
+                output_df_pre, baseline_diff_pre, intensity_pre = self.add_baseline_diff(pd.DataFrame(intensity), column_name, pd.DataFrame(),
+                                                         normalize=False, skip_correction=(not bkg_before_jar))
+                intensity_pre = pd.Series(intensity_pre)
+                intensity = intensity_pre
+
+
             if do_correction and jar_correction:
                 intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity),
-                                                                            column_name, pd.DataFrame())
+                                                                            0, pd.DataFrame(),
+                                                                            normalize=False)
+
+                if bkg_before_jar:
+                    _, _, jar_intensity = self.add_baseline_diff(pd.DataFrame(jar_intensity.to_numpy()), 0, pd.DataFrame(), normalize=False)
 
                 # Calculate scaling factor for jar curve and apply to jar curve
                 diff = jar_intensity / intensity.to_numpy()
@@ -775,7 +792,9 @@ class BackgroundCorrection:
                 jar_scaled = factor * jar_intensity
 
                 if jar_debug:
-                    plt.plot(intensity, label="intensity")
+                    x_values = x_column_selection.to_numpy()
+                    # plt.plot(x_values, original_data, label="intensity")
+                    plt.plot(x_values, intensity, label="pre-jar intensity")
 
                 # Subtract jar reference intensity from intensity
                 intensity = intensity - jar_scaled
@@ -786,9 +805,9 @@ class BackgroundCorrection:
                     intensity = intensity - intensity_min
 
                 if jar_debug:
-                    plt.plot(jar_intensity, label="jar (unscaled)")
-                    plt.plot(jar_scaled, label="jar (scaled)")
-                    plt.plot(intensity, label="jar-corrected intensity")
+                    plt.plot(x_values, jar_intensity, label="jar (unscaled)")
+                    plt.plot(x_values, jar_scaled, label="jar (scaled)")
+                    plt.plot(x_values, intensity, label="jar-corrected intensity")
                     plt.legend()
                     plt.show()
 
@@ -805,10 +824,18 @@ class BackgroundCorrection:
             data = pd.concat([x_column_selection, intensity], axis='columns')
             data = data.reset_index(drop=True)
 
+
             output_df, baseline_diff, unscaled_corrected = self.add_baseline_diff(data, data.columns[1],
-                                                                                  output_df, data.columns[0])
+                                                                                  output_df, data.columns[0],
+                                                                                  skip_correction=bkg_before_jar)
+
+            output_df = output_df_pre if bkg_before_jar else output_df
+            baseline_diff = baseline_diff_pre if bkg_before_jar else baseline_diff
+            unscaled_corrected = intensity_pre if bkg_before_jar else unscaled_corrected
 
             if plot_data:  # will plot every set of data if this option is enabled
+                x_values = x_column_selection.to_numpy()
+
                 baseline = pd.DataFrame()
                 baseline['baseline'] = baseline_diff
 
@@ -817,18 +844,18 @@ class BackgroundCorrection:
                 unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
 
                 try:
-                   plt.plot(intensity, color="blue", label="original")
-                   plt.plot(baseline['baseline'], color="red", label="baseline")
-                   plt.plot(unscaled, color="green", label="baseline corrected")
+                    plt.plot(x_values, original_data, color="blue", label="original")
+                    plt.plot(x_values, baseline['baseline'], color="red", label="baseline")
+                    plt.plot(x_values, unscaled, color="green", label="baseline corrected")
 
-                   plt.xlabel(x_column_name)
-                   plt.ylabel("intensity")
-                   plt.legend(loc='upper right')
-                   plt.title(column_name)
+                    plt.xlabel(x_column_name)
+                    plt.ylabel("intensity")
+                    plt.legend(loc='upper right')
+                    plt.title(column_name)
 
-                   plt.show()
+                    plt.show()
                 except KeyError:
-                   print(f'[{current_file}] failed plotting')
+                    print(f'[{current_file}] failed plotting')
 
         if do_correction:
             out_file = current_file[:-4] + '.dat'
