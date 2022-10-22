@@ -63,7 +63,7 @@ import time
 
 # Select the index of the column a test run should be executed on. Leave empty ('' or "") if no testing is required.
 # If set, the Background will only run on this column to test the fit of the parameters chosen
-test_row_index = '2'
+test_row_index = '1'
 
 # Set to True to show every processed dataset in a plot.
 # ATTENTION: When running with this option turned on, execution will be paused while the plot is being displayed
@@ -79,7 +79,7 @@ header_row_count = 1  # DEFAULT: 4
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
 jar_correction = True
 bkg_before_jar = True
-jar_scaling_range = (-np.infty, np.infty)  # Set range as (start_value, end_value), e.g. (0, 100)
+jar_scaling_range = (1492, 1555)  # Set range as (start_value, end_value, "(-np.infty, np.infty)"), e.g. (0, 100)
 jar_debug = True
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
@@ -177,7 +177,7 @@ def q_A_to_q_nm(val: float) -> float:
 
 def two_theta_to_q_A(val: float) -> float:
     val_rad = deg_to_rad(val)
-    return (4 * np.pi * np.sin(val_rad/2)) / lam
+    return (4 * np.pi * np.sin(val_rad / 2)) / lam
 
 
 def q_A_to_two_theta(val: float) -> float:
@@ -257,13 +257,13 @@ class ReadRamanToDF:  # Class to read Raman file into pandas DataFrames
     def file_content_to_df(self):
         lines_raw = self.file_content.split("\n")  # splits up lines and removes the header
         if self.include_head:
-            lines = list(map(lambda x: x.split(), lines_raw[1:-1]))  # splits up the columns of each line
+            lines = list(map(lambda x: x.split(), lines_raw[header_row_count:-1]))  # splits up the columns of each line
         else:
             lines = list(map(lambda x: x.split(), lines_raw[:-1]))  # splits up the columns of each line
 
         num_columns = len(lines[0])
         try:
-            column_names = ['RamanShift (cm-1)', *lines_raw[0].split()[2:]]
+            column_names = ['RamanShift (cm-1)', *lines_raw[0].split()[1:]]
         except IndexError:
             column_names = ['RamanShift (cm-1)', *list('I_' + str(x) for x in range(num_columns - 1))]
 
@@ -491,7 +491,8 @@ class BackgroundCorrection:
 
     def export_rois(self, data_per_subdir):
         root = Tk()
-        show_plot = askyesno(title="Plotting", message="Would you like to create a plot with corrected intensity and ROI integration values?")
+        show_plot = askyesno(title="Plotting",
+                             message="Would you like to create a plot with corrected intensity and ROI integration values?")
         root.destroy()
 
         for file_dir, roi_areas in data_per_subdir.items():
@@ -503,7 +504,9 @@ class BackgroundCorrection:
             data = np.array(roi_areas).T
 
             export_data = np.array([data[:, 0], *np.array([*data[:, 2]]).T]).T
-            header = ",".join(["filename", *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop) in enumerate(roi_ranges)]])
+            header = ",".join(["filename",
+                               *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop) in
+                                 enumerate(roi_ranges)]])
             np.savetxt(out_dir + f"\\rois.csv", export_data, delimiter=",", fmt="%s", header=header, comments="")
 
             if show_plot:
@@ -525,7 +528,7 @@ class BackgroundCorrection:
                     for col in np.flip(df.to_numpy()[:, 1:].T):
                         joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
 
-                y_scale = list(np.arange(0, len(joined_df.columns)-1) * time_step)
+                y_scale = list(np.arange(0, len(joined_df.columns) - 1) * time_step)
                 extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
                 joined_df = joined_df.astype(float)
@@ -573,7 +576,8 @@ class BackgroundCorrection:
             files = []
             # No files selected -> Ask for directory
             files_dir = askdirectory()
-            files_subdirs = [subdir.path for subdir in os.scandir(files_dir) if subdir.is_dir() and subdir.name != "out"]
+            files_subdirs = [subdir.path for subdir in os.scandir(files_dir) if
+                             subdir.is_dir() and subdir.name != "out"]
             subdir_files = [[file.path for file in os.scandir(subdir) if os.path.isfile(file)] for subdir in
                             [*files_subdirs, files_dir]]
 
@@ -647,7 +651,8 @@ class BackgroundCorrection:
 
         return headers
 
-    def add_baseline_diff(self, df: pd.DataFrame, column_name: str, return_df: pd.DataFrame, x_column_name: str = None, normalize: bool = True, skip_correction: bool = False):
+    def add_baseline_diff(self, df: pd.DataFrame, column_name: str, return_df: pd.DataFrame, x_column_name: str = None,
+                          normalize: bool = True, skip_correction: bool = False):
         """
         Function for extending the return_df dataFrame with the processed values from waxs_df for a certain probe
 
@@ -660,8 +665,13 @@ class BackgroundCorrection:
 
         column = df[column_name]
 
+        print("COLUMN", column_name, column, type(column))
+        print("NP COLUMN", column.to_numpy(na_value=0), type(column.to_numpy(na_value=0)))
+
         if do_correction and not skip_correction:
-            baseline = Algorithms.algorithm(algorithm)(column.to_numpy())
+            baseline = Algorithms.algorithm(algorithm)(column.to_numpy(na_value=0))
+
+            print("BASELINE", baseline, type(baseline))
 
             intensity_corrected = np.array(column - baseline)
         else:
@@ -691,6 +701,9 @@ class BackgroundCorrection:
     def get_jar_reference(self, x_column_selection, min_selection, max_selection):
         # Read jar reference data and apply wave range
         jar_read = self.read_jar_reference()
+
+        print(jar_read, type(jar_read))
+
         jar_data = pd.concat([x_column_selection, self.apply_wave_range(jar_read, jar_read.columns[1],
                                                                         min_selection, max_selection)], axis=1)
 
@@ -703,8 +716,10 @@ class BackgroundCorrection:
         # Apply user-selected range for jar peak to x and intensity arrays and calculate area underneath the curve
         jar_min_selection = jar_data[jar_x_column_name] >= jar_scaling_range[0]
         jar_max_selection = jar_data[jar_x_column_name] <= jar_scaling_range[1]
-        jar_corrected_ranged_x = jar_data[jar_x_column_name].loc[(jar_min_selection & jar_max_selection)].to_numpy()
-        jar_corrected_ranged_area = np.trapz(y=jar_intensity, x=jar_corrected_ranged_x)
+
+        # jar_corrected_ranged_x = jar_data[jar_x_column_name].loc[(jar_min_selection & jar_max_selection)].to_numpy()
+        # jar_corrected_ranged_y = jar_data[jar_data_column_name].loc[(jar_min_selection & jar_max_selection)].to_numpy()
+        # jar_corrected_ranged_area = np.trapz(y=jar_corrected_ranged_y, x=jar_corrected_ranged_x)
 
         return jar_intensity, jar_min_selection, jar_max_selection
 
@@ -746,7 +761,9 @@ class BackgroundCorrection:
         x_column_selection, min_selection, max_selection = self.apply_wave_range(df, x_column_name)
 
         output_df = pd.DataFrame()
-        output_df[x_column_name] = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_column_selection, x_scale_input_unit, x_scale_output_unit)
+        output_df[x_column_name] = np.vectorize(convert_x, excluded=["from_unit", "to_unit"])(x_column_selection,
+                                                                                              x_scale_input_unit,
+                                                                                              x_scale_output_unit)
 
         if jar_correction:
             jar_intensity, jar_min_selection, jar_max_selection = \
@@ -771,25 +788,39 @@ class BackgroundCorrection:
             original_data = intensity
 
             if do_correction and bkg_before_jar:
-                output_df_pre, baseline_diff_pre, intensity_pre = self.add_baseline_diff(pd.DataFrame(intensity), column_name, pd.DataFrame(),
-                                                         normalize=False, skip_correction=(not bkg_before_jar))
+                output_df_pre, baseline_diff_pre, intensity_pre = self.add_baseline_diff(pd.DataFrame(intensity),
+                                                                                         column_name, output_df.copy(),
+                                                                                         normalize=False,
+                                                                                         skip_correction=(
+                                                                                             not bkg_before_jar))
                 intensity_pre = pd.Series(intensity_pre)
                 intensity = intensity_pre
-
 
             if do_correction and jar_correction:
                 intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity),
                                                                             0, pd.DataFrame(),
                                                                             normalize=False)
+                print(jar_intensity, type(jar_intensity))
+                jar_original = jar_intensity
 
                 if bkg_before_jar:
-                    _, _, jar_intensity = self.add_baseline_diff(pd.DataFrame(jar_intensity.to_numpy()), 0, pd.DataFrame(), normalize=False)
+                    _, jar_baseline, jar_intensity_corrected = self.add_baseline_diff(
+                        pd.DataFrame(jar_intensity.to_numpy()), 0, pd.DataFrame(), normalize=False)
+
+                jar_ranged = jar_intensity_corrected[jar_min_selection & jar_max_selection]
+                data_ranged = intensity.to_numpy()[jar_min_selection & jar_max_selection]
+
+                print(jar_intensity_corrected, type(jar_intensity_corrected))
+                print(jar_ranged, type(jar_ranged))
+                print(data_ranged, type(data_ranged))
 
                 # Calculate scaling factor for jar curve and apply to jar curve
-                diff = jar_intensity / intensity.to_numpy()
+                diff = jar_ranged / data_ranged
                 max_diff_pos = np.argmax(diff)
                 factor = 1 / diff[max_diff_pos]
-                jar_scaled = factor * jar_intensity
+                jar_scaled = factor * jar_intensity_corrected
+
+                print("DIFF", diff, type(diff))
 
                 if jar_debug:
                     x_values = x_column_selection.to_numpy()
@@ -805,18 +836,25 @@ class BackgroundCorrection:
                     intensity = intensity - intensity_min
 
                 if jar_debug:
-                    plt.plot(x_values, jar_intensity, label="jar (unscaled)")
-                    plt.plot(x_values, jar_scaled, label="jar (scaled)")
-                    plt.plot(x_values, intensity, label="jar-corrected intensity")
+                    plt.plot(x_values, jar_original, label="jar original")
+                    plt.plot(x_values, jar_intensity_corrected, label="jar bkg (unscaled)")
+                    plt.plot(x_values, jar_scaled, label="jar bkg (scaled)")
+                    # plt.plot(x_values, intensity, label="jar-corrected intensity")
+                    plt.plot(x_values, jar_baseline, label="jar baseline")
                     plt.legend()
                     plt.show()
 
                     print("Jar scale factor:", factor)
                     print("Min intensity", np.min(intensity))
 
+                print("INTENSITY PRE NORM", intensity, type(intensity))
+
                 if norm_final:
                     intensity_corrected_area = abs(np.trapz(y=intensity, x=x_column_selection.to_numpy()))
                     intensity = intensity / intensity_corrected_area
+
+                    print("INTENSITY AREA", intensity_corrected_area)
+                    print("INTENSITY POST NORM", intensity, type(intensity))
 
                 # TODO: Export Jar-Corrected data
                 jar_df[column_name] = intensity.to_numpy()
@@ -824,6 +862,7 @@ class BackgroundCorrection:
             data = pd.concat([x_column_selection, intensity], axis='columns')
             data = data.reset_index(drop=True)
 
+            print("DATA", data, type(data))
 
             output_df, baseline_diff, unscaled_corrected = self.add_baseline_diff(data, data.columns[1],
                                                                                   output_df, data.columns[0],
@@ -832,6 +871,9 @@ class BackgroundCorrection:
             output_df = output_df_pre if bkg_before_jar else output_df
             baseline_diff = baseline_diff_pre if bkg_before_jar else baseline_diff
             unscaled_corrected = intensity_pre if bkg_before_jar else unscaled_corrected
+
+            print("CORRECTION DONE")
+            print(output_df, type(output_df))
 
             if plot_data:  # will plot every set of data if this option is enabled
                 x_values = x_column_selection.to_numpy()
@@ -842,11 +884,13 @@ class BackgroundCorrection:
                 baseline = baseline.set_index(x_column_selection)
                 intensity = pd.DataFrame(intensity).set_index(x_column_selection)
                 unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
+                final = output_df[column_name]
 
                 try:
-                    plt.plot(x_values, original_data, color="blue", label="original")
-                    plt.plot(x_values, baseline['baseline'], color="red", label="baseline")
-                    plt.plot(x_values, unscaled, color="green", label="baseline corrected")
+                    plt.plot(x_values, original_data, label="original")
+                    plt.plot(x_values, baseline['baseline'], label="baseline")
+                    plt.plot(x_values, unscaled, label="baseline corrected")
+                    plt.plot(x_values, final, label="final")
 
                     plt.xlabel(x_column_name)
                     plt.ylabel("intensity")
@@ -881,7 +925,9 @@ class BackgroundCorrection:
                 WriteDFToFile(jar_df, jar_out_file, head=head, sep=dat_file_separator)
 
         if get_rois:
-            roi_areas = np.array([self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in roi_ranges])
+            roi_areas = np.array(
+                [self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in
+                 roi_ranges])
 
             return output_df, roi_areas
         else:
