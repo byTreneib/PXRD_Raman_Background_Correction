@@ -6,7 +6,7 @@ This source code is licensed under the license found in the
 LICENSE file in the root directory of this source tree.
 """
 
-__version__ = "0.9.7"
+__version__ = "0.10.0"
 
 # backgroundCorrection_V0.9.5.py
 # https://github.com/byTreneib/BackgroundCorrection
