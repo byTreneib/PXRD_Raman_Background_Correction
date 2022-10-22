@@ -45,6 +45,7 @@ import os
 
 from warnings import warn
 
+import numpy.linalg
 from pyspectra.readers.read_spc import spc
 from scipy.sparse.linalg import spsolve
 from scipy.linalg import cholesky
@@ -79,7 +80,7 @@ header_row_count = 1  # DEFAULT: 4
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
 jar_correction = True
 bkg_before_jar = True
-jar_scaling_range = (1492, 1555)  # Set range as (start_value, end_value, "(-np.infty, np.infty)"), e.g. (0, 100)
+jar_scaling_range = (1704, 1758)  # Set range as (start_value, end_value, "(-np.infty, np.infty)"), e.g. (0, 100)
 jar_debug = True
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
@@ -96,9 +97,9 @@ do_correction = True
 algorithm = 1
 
 # Parameters for the baseline algorithm
-baseline_itermax = 100  # number of iterations the algorithm will perform
-baseline_lambda = 1E4  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
-baseline_ratio = 0.0001  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
+baseline_itermax = 30  # number of iterations the algorithm will perform
+baseline_lambda = 10000  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
+baseline_ratio = 0.0002  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
 
 # Peak ROI Selection
 # WARNING: This option currently only generates expected behaviour for input files with one y column!
@@ -663,10 +664,12 @@ class BackgroundCorrection:
         :return: the return_df with updated values AND baseline
         """
 
+        # print("BASELINE SELECTION", df, type(df))
+
         column = df[column_name]
 
-        print("COLUMN", column_name, column, type(column))
-        print("NP COLUMN", column.to_numpy(na_value=0), type(column.to_numpy(na_value=0)))
+        # print("COLUMN", column_name, column, type(column))
+        # print("NP COLUMN", column.to_numpy(na_value=0), type(column.to_numpy(na_value=0)))
 
         if do_correction and not skip_correction:
             baseline = Algorithms.algorithm(algorithm)(column.to_numpy(na_value=0))
@@ -787,93 +790,73 @@ class BackgroundCorrection:
 
             original_data = intensity
 
-            if do_correction and bkg_before_jar:
-                output_df_pre, baseline_diff_pre, intensity_pre = self.add_baseline_diff(pd.DataFrame(intensity),
-                                                                                         column_name, output_df.copy(),
-                                                                                         normalize=False,
-                                                                                         skip_correction=(
-                                                                                             not bkg_before_jar))
-                intensity_pre = pd.Series(intensity_pre)
-                intensity = intensity_pre
-
             if do_correction and jar_correction:
-                intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity),
-                                                                            0, pd.DataFrame(),
-                                                                            normalize=False)
-                print(jar_intensity, type(jar_intensity))
+                # intensity_baseline_corrected, _, _ = self.add_baseline_diff(pd.DataFrame(intensity.to_numpy()),
+                #                                                             0, pd.DataFrame(),
+                #                                                             normalize=False)
+
+                # print("JAR INTENSITY", jar_intensity, type(jar_intensity))
                 jar_original = jar_intensity
 
-                if bkg_before_jar:
-                    _, jar_baseline, jar_intensity_corrected = self.add_baseline_diff(
-                        pd.DataFrame(jar_intensity.to_numpy()), 0, pd.DataFrame(), normalize=False)
-
-                jar_ranged = jar_intensity_corrected[jar_min_selection & jar_max_selection]
+                jar_ranged = jar_intensity.to_numpy()[jar_min_selection & jar_max_selection]
                 data_ranged = intensity.to_numpy()[jar_min_selection & jar_max_selection]
 
-                print(jar_intensity_corrected, type(jar_intensity_corrected))
-                print(jar_ranged, type(jar_ranged))
-                print(data_ranged, type(data_ranged))
+                # Background correct jar and spectra
+                _, jar_ranged_baseline, jar_ranged_corrected = self.add_baseline_diff(pd.DataFrame(jar_ranged), 0, pd.DataFrame(), normalize=False)
+                _, data_ranged_baseline, data_ranged_corrected = self.add_baseline_diff(pd.DataFrame(data_ranged), 0, pd.DataFrame(), normalize=False)
 
-                # Calculate scaling factor for jar curve and apply to jar curve
-                diff = jar_ranged / data_ranged
-                max_diff_pos = np.argmax(diff)
-                factor = 1 / diff[max_diff_pos]
-                jar_scaled = factor * jar_intensity_corrected
-
-                print("DIFF", diff, type(diff))
+                # Calculate and apply scaling factor for jar curve
+                factor, _, _, _ = numpy.linalg.lstsq(jar_ranged_corrected.reshape(-1, 1), data_ranged_corrected)
+                jar_scaled = factor * jar_intensity
 
                 if jar_debug:
                     x_values = x_column_selection.to_numpy()
-                    # plt.plot(x_values, original_data, label="intensity")
-                    plt.plot(x_values, intensity, label="pre-jar intensity")
+                    jar_x_ranged = x_column_selection.loc[jar_min_selection & jar_max_selection].to_numpy()
+
+                    plt.plot(x_values, original_data, label="intensity (original)")
+                    plt.plot(x_values, intensity, label="intensity (pre jar-correction)")
 
                 # Subtract jar reference intensity from intensity
                 intensity = intensity - jar_scaled
 
                 # Correct intensity in case of minimal error due to machine inaccuracy
                 intensity_min = np.min(intensity)
+                intensity_min_pos = np.argmin(intensity)
                 if intensity_min < 0:
                     intensity = intensity - intensity_min
 
                 if jar_debug:
-                    plt.plot(x_values, jar_original, label="jar original")
-                    plt.plot(x_values, jar_intensity_corrected, label="jar bkg (unscaled)")
-                    plt.plot(x_values, jar_scaled, label="jar bkg (scaled)")
-                    # plt.plot(x_values, intensity, label="jar-corrected intensity")
-                    plt.plot(x_values, jar_baseline, label="jar baseline")
+                    print("Jar scale factor:", factor)
+                    print("Min intensity", intensity_min, "at", x_column_selection[intensity_min_pos])
+
+                    plt.plot(x_values, jar_original, label="jar (original)")
+                    plt.plot(x_values, jar_scaled, label="jar (corrected, scaled)")
+
+                    plt.plot(jar_x_ranged, jar_ranged_baseline, label="jar baseline (ranged)")
+                    plt.plot(jar_x_ranged, jar_ranged_corrected, label="jar (ranged, corrected)")
+
+                    plt.plot(jar_x_ranged, data_ranged_corrected, label="intensity (ranged, corrected)")
+                    plt.plot(jar_x_ranged, data_ranged_baseline, label="intensity baseline (ranged)")
+
+                    plt.plot(x_values, intensity, label="intensity (post jar-correction)")
+
                     plt.legend()
                     plt.show()
 
-                    print("Jar scale factor:", factor)
-                    print("Min intensity", np.min(intensity))
+                # if norm_final:
+                #     intensity_corrected_area = abs(np.trapz(y=intensity, x=x_column_selection.to_numpy()))
+                #     intensity = intensity / intensity_corrected_area
+                #
+                #     print("INTENSITY AREA", intensity_corrected_area)
+                #     print("INTENSITY POST NORM", intensity, type(intensity))
 
-                print("INTENSITY PRE NORM", intensity, type(intensity))
-
-                if norm_final:
-                    intensity_corrected_area = abs(np.trapz(y=intensity, x=x_column_selection.to_numpy()))
-                    intensity = intensity / intensity_corrected_area
-
-                    print("INTENSITY AREA", intensity_corrected_area)
-                    print("INTENSITY POST NORM", intensity, type(intensity))
-
-                # TODO: Export Jar-Corrected data
                 jar_df[column_name] = intensity.to_numpy()
 
-            data = pd.concat([x_column_selection, intensity], axis='columns')
+            data = pd.concat([x_column_selection, intensity.rename(column_name)], axis='columns')
             data = data.reset_index(drop=True)
 
-            print("DATA", data, type(data))
-
             output_df, baseline_diff, unscaled_corrected = self.add_baseline_diff(data, data.columns[1],
-                                                                                  output_df, data.columns[0],
-                                                                                  skip_correction=bkg_before_jar)
-
-            output_df = output_df_pre if bkg_before_jar else output_df
-            baseline_diff = baseline_diff_pre if bkg_before_jar else baseline_diff
-            unscaled_corrected = intensity_pre if bkg_before_jar else unscaled_corrected
-
-            print("CORRECTION DONE")
-            print(output_df, type(output_df))
+                                                                                  output_df, data.columns[0])
 
             if plot_data:  # will plot every set of data if this option is enabled
                 x_values = x_column_selection.to_numpy()
@@ -887,10 +870,10 @@ class BackgroundCorrection:
                 final = output_df[column_name]
 
                 try:
-                    plt.plot(x_values, original_data, label="original")
-                    plt.plot(x_values, baseline['baseline'], label="baseline")
-                    plt.plot(x_values, unscaled, label="baseline corrected")
-                    plt.plot(x_values, final, label="final")
+                    plt.plot(x_values, original_data, label="intensity (original)")
+                    plt.plot(x_values, baseline['baseline'], label="intensity baseline")
+                    plt.plot(x_values, unscaled, label="intensity (corrected, not normalized)")
+                    plt.plot(x_values, final, label="intensity (final result)")
 
                     plt.xlabel(x_column_name)
                     plt.ylabel("intensity")
