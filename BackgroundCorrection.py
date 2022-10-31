@@ -6,7 +6,7 @@ This source code is licensed under the license found in the
 LICENSE file in the root directory of this source tree.
 """
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 # backgroundCorrection_V0.9.5.py
 # https://github.com/byTreneib/BackgroundCorrection
@@ -64,21 +64,21 @@ import time
 
 # Select the index of the column a test run should be executed on. Leave empty ('' or "") if no testing is required.
 # If set, the Background will only run on this column to test the fit of the parameters chosen
-test_row_index = '1'
+test_row_index = '10'
 
 # Set to True to show every processed dataset in a plot.
 # ATTENTION: When running with this option turned on, execution will be paused while the plot is being displayed
-plot_data = True
+plot_data = False
 
 dat_file_separator = '\t'  # Separator (as string), that will be used to separate the values when writing to .dat file
 include_header = True  # When true, will read the headers of the input files, and extend them with the parameters
-header_row_count = 1  # DEFAULT: 4
+header_row_count = 4  # DEFAULT: 4
 
 # When jar_correction is set to True the user will be asked to provide a file containing reference intensities for the
 # jar in a second prompt. The program will then scale the reference intensities within the provided jar_scaling_range
 # and subtract the reference intensities from the scan data.
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
-jar_correction = True
+jar_correction = False
 bkg_before_jar = True
 jar_scaling_range = (1704, 1758)  # Set range as (start_value, end_value, "(-np.infty, np.infty)"), e.g. (0, 100)
 jar_debug = True
@@ -87,26 +87,26 @@ jar_debug = True
 norm_final = True
 
 # Minimum and maximum value for the x column
-wave_min = -np.infty
-wave_max = np.infty
+wave_min = 0.51
+wave_max = 6
 
 # Select the algorithm that will do the background correction (as integer)
 # 0 -> arpls, slow, I guess it is better for Raman
 # 1 -> als, fast, for PXRD
-do_correction = True
+do_correction = False
 algorithm = 1
 
 # Parameters for the baseline algorithm
-baseline_itermax = 30  # number of iterations the algorithm will perform
-baseline_lambda = 10000  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
-baseline_ratio = 0.0002  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
+baseline_itermax = 500  # number of iterations the algorithm will perform
+baseline_lambda = 500  # the larger lambda is, the smoother the resulting background, 500 for PXRD with little PMMA jars
+baseline_ratio = 0.0007  # wheighting deviations: 0 < baseline_ratio < 1, smaller values allow less negative values, 0.0007 for PXRD with little PMMA jars
 
 # Peak ROI Selection
 # WARNING: This option currently only generates expected behaviour for input files with one y column!
-get_rois = False
+get_rois = True
 roi_ranges = [
-    (0.72, 0.73),
-    (0.75, 0.76),
+    (0.5, 0.9, "red"),
+    (1.8, 2, ""),
 ]
 normalize_integration = True
 time_step = 1
@@ -506,7 +506,7 @@ class BackgroundCorrection:
 
             export_data = np.array([data[:, 0], *np.array([*data[:, 2]]).T]).T
             header = ",".join(["filename",
-                               *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop) in
+                               *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop, color) in
                                  enumerate(roi_ranges)]])
             np.savetxt(out_dir + f"\\rois.csv", export_data, delimiter=",", fmt="%s", header=header, comments="")
 
@@ -530,29 +530,56 @@ class BackgroundCorrection:
                         joined_df = pd.concat([joined_df, pd.DataFrame(col)], axis=1)
 
                 y_scale = list(np.arange(0, len(joined_df.columns) - 1) * time_step)
+                y_scale = np.flip(y_scale) if not plot_flip_y else y_scale
+
                 extent = [np.min(x_scale), np.max(x_scale), np.min(y_scale), np.max(y_scale)]
 
                 joined_df = joined_df.astype(float)
+                plot_data = joined_df.to_numpy()[::-1, 1:].T
+                plot_data = np.flip(plot_data, 0) if plot_flip_y else plot_data
 
                 fig, (ax1, ax2) = plt.subplots(1, 2, sharey='row', gridspec_kw={'width_ratios': [5, 2]})
-                ax1.imshow(joined_df.to_numpy()[:, 1:].T, extent=extent, cmap="hot")
+                ax1.imshow(plot_data, extent=extent, cmap="hot")
                 ax1.set_xlabel(unit_x_str(x_scale_output_unit))
                 ax1.set_ylabel("Time [s]")
                 ax1.set_xlim(extent[0], extent[1])
                 ax1.set_ylim(extent[2], extent[3])
                 ax1.set_aspect("auto")
-                ax1.invert_yaxis()
 
-                roi_area_values_grounded = (roi_area_values - np.min(roi_area_values))
-                roi_area_values_normalized = roi_area_values_grounded / np.max(roi_area_values_grounded)
+                if not plot_flip_y:
+                    ax1.invert_yaxis()
 
-                for roi_area in roi_area_values_normalized.T:
+                # roi_area_values_grounded = (roi_area_values - np.min(roi_area_values))
+                # roi_area_values_normalized = roi_area_values_grounded / np.max(roi_area_values_grounded)
+
+                # roi_area_values_normalized = roi_area_values / np.sum(roi_area_values)
+                # roi_area_values_grounded = roi_area_values_normalized - np.min(roi_area_values_normalized)
+
+                axis_sum = np.sum(roi_area_values, axis=1)
+                axis_quot = 1 / axis_sum
+
+                roi_scale = np.mean(axis_quot)
+                print(np.mean(axis_sum), roi_scale)
+
+                roi_area_values_scaled = roi_area_values * roi_scale
+
+                ax2.set_xlim(np.min(roi_area_values_scaled), np.max(roi_area_values_scaled))
+                # print(np.min(roi_area_values_grounded), np.max(roi_area_values_grounded))
+
+                for roi_area, (_, _, color) in zip(roi_area_values_scaled.T, roi_ranges):
                     y_scale = np.arange(len(roi_area)) * time_step
 
-                    if plot_flip_y:
-                        ax2.scatter(roi_area, y_scale, s=5)
+                    if color not in [None, ""]:
+                        if plot_flip_y:
+                            ax2.scatter(roi_area, y_scale, s=5, c=color)
+                        else:
+                            ax2.scatter(roi_area[::-1], y_scale, s=5, c=color)
                     else:
-                        ax2.scatter(roi_area[::-1], y_scale, s=5)
+                        if plot_flip_y:
+                            ax2.scatter(roi_area, y_scale, s=5)
+                        else:
+                            ax2.scatter(roi_area[::-1], y_scale, s=5)
+
                 ax2.tick_params(
                     axis='y',
                     which="both",
@@ -687,7 +714,6 @@ class BackgroundCorrection:
             intensity_corrected_normed = intensity_corrected / intensity_corrected_area
 
             return_df[column_name] = intensity_corrected_normed  # add difference to return df
-            intensity_corrected = intensity_corrected_normed
         else:
             return_df[column_name] = intensity_corrected
 
@@ -860,19 +886,12 @@ class BackgroundCorrection:
 
             if plot_data:  # will plot every set of data if this option is enabled
                 x_values = x_column_selection.to_numpy()
-
-                baseline = pd.DataFrame()
-                baseline['baseline'] = baseline_diff
-
-                baseline = baseline.set_index(x_column_selection)
-                intensity = pd.DataFrame(intensity).set_index(x_column_selection)
-                unscaled = pd.DataFrame(unscaled_corrected).set_index(x_column_selection)
                 final = output_df[column_name]
 
                 try:
                     plt.plot(x_values, original_data, label="intensity (original)")
-                    plt.plot(x_values, baseline['baseline'], label="intensity baseline")
-                    plt.plot(x_values, unscaled, label="intensity (corrected, not normalized)")
+                    plt.plot(x_values, baseline_diff, label="intensity baseline")
+                    plt.plot(x_values, unscaled_corrected, label="intensity (corrected, not normalized)")
                     plt.plot(x_values, final, label="intensity (final result)")
 
                     plt.xlabel(x_column_name)
@@ -881,8 +900,8 @@ class BackgroundCorrection:
                     plt.title(column_name)
 
                     plt.show()
-                except KeyError:
-                    print(f'[{current_file}] failed plotting')
+                except KeyError as error:
+                    print(f'[{current_file}] failed plotting:\n', error.with_traceback(error.__traceback__))
 
         if do_correction:
             out_file = current_file[:-4] + '.dat'
@@ -909,7 +928,7 @@ class BackgroundCorrection:
 
         if get_rois:
             roi_areas = np.array(
-                [self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop) in
+                [self.get_roi_area(output_df, x_column_name, roi_min=start, roi_max=stop) for (start, stop, color) in
                  roi_ranges])
 
             return output_df, roi_areas
