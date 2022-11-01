@@ -1,26 +1,24 @@
 """
-Copyright (c) 2021, Martin Bienert
+Copyright (c) 2022, Martin Bienert
 All rights reserved.
 
 This source code is licensed under the license found in the
 LICENSE file in the root directory of this source tree.
 """
 
-__version__ = "0.10.1"
+__version__ = "0.10.2"
 
-# backgroundCorrection_V0.9.5.py
-# https://github.com/byTreneib/BackgroundCorrection
-# 2021-10-01
+# https://github.com/byTreneib/PXRD_Raman_Background_Correction.git
+# 2022-11-01
 # Python 3.7.1 script for background substraction of PXRD (*.xy) and Raman (*.txt or *.spc) data by Martin Bienert.
 # Tested with PyCharm and Spyder from Anaconda.
 # Script must be edited. "START OF EDITING"
-# Background substracted data will be saved in the same folder as the unprocessed data.
+# Background substracted data will be saved in a folder 'out' in the same directory as the unprocessed data.
 # There will be no changes of the X parameters; input=output
 # Output: Background corrected data
 # Output file extension: dat
 # One has to play around with the lambda values. (Raman 1E5; Mill experiments <1E3)
 # If nothing happens: stop the script, restart PYTHON
-# One can change the order of the file extension for the file selection dialogue in line 99
 #
 # Format of raman data: as spc-file or as one file with many columns
 # RamanShift (cm-1)	00:00:27	00:01:30	00:02:00	..:..:..	00:21:00
@@ -80,7 +78,7 @@ header_row_count = 4  # DEFAULT: 4
 # ATTENTION: At current state of development, when enabled, this will consume significantly more time than without it.
 jar_correction = False
 bkg_before_jar = True
-jar_scaling_range = (1704, 1758)  # Set range as (start_value, end_value, "(-np.infty, np.infty)"), e.g. (0, 100)
+jar_scaling_range = (1704, 1758)  # Set range as (start_value, end_value), e.g. (0, 100)
 jar_debug = True
 
 # Set to true to norm the final corrected result to the area under the curve. The additional time taken is minimal.
@@ -108,7 +106,6 @@ roi_ranges = [
     (0.5, 0.9, "red"),
     (1.8, 2, ""),
 ]
-normalize_integration = True
 time_step = 1
 plot_flip_y = True
 
@@ -118,7 +115,7 @@ plot_flip_y = True
 # 2 -> 2Theta
 x_scale_output_unit = 1
 x_scale_input_unit = 1
-lam = 0.207
+lam = 0.207  # DEFAULT: 0.207. WARNING: This is the constant used during conversion of q_A <-> 2Theta. Do not edit unless you know what you are doing!
 
 # List of file types that will be available in the file input prompt
 readfile_ui_file_types = [("txt raman files", "*.txt"),
@@ -503,8 +500,20 @@ class BackgroundCorrection:
                 os.mkdir(out_dir)
 
             data = np.array(roi_areas).T
+            roi_area_values = np.array([*data[:, 2]])
 
-            export_data = np.array([data[:, 0], *np.array([*data[:, 2]]).T]).T
+
+            # Normalize elementwise sum of ROI curves to 1 (using Least Square approximation of a linear equation system)
+            target_y = np.ones(roi_area_values.shape[0])
+            roi_scales, error_sum, _, _ = np.linalg.lstsq(roi_area_values.astype(np.float64), target_y, rcond=None)
+
+            roi_area_values_scaled = roi_area_values * roi_scales
+            mean_error = np.sqrt(error_sum / target_y.shape[0])
+
+            print(f"Calculated scaling factors {roi_scales} with a mean error of {mean_error}.")
+
+
+            export_data = np.array([data[:, 0], *roi_area_values_scaled.T]).T
             header = ",".join(["filename",
                                *[f"roi_{i}[{str(float(start)) + ' to ' + str(float(stop))}]" for i, (start, stop, color) in
                                  enumerate(roi_ranges)]])
@@ -512,7 +521,7 @@ class BackgroundCorrection:
 
             if show_plot:
                 intensity_dfs = data[:, 1]
-                roi_area_values = np.array([*data[:, 2]]).astype(np.float16)
+                roi_area_values = np.array([*data[:, 2]])
 
                 first_df = intensity_dfs[0]
 
@@ -555,13 +564,13 @@ class BackgroundCorrection:
                 # roi_area_values_normalized = roi_area_values / np.sum(roi_area_values)
                 # roi_area_values_grounded = roi_area_values_normalized - np.min(roi_area_values_normalized)
 
-                axis_sum = np.sum(roi_area_values, axis=1)
-                axis_quot = 1 / axis_sum
-
-                roi_scale = np.mean(axis_quot)
-                print(np.mean(axis_sum), roi_scale)
-
-                roi_area_values_scaled = roi_area_values * roi_scale
+                # axis_sum = np.sum(roi_area_values, axis=1)
+                # axis_quot = 1 / axis_sum
+                #
+                # roi_scale = np.mean(axis_quot)
+                # print(np.mean(axis_sum), roi_scale)
+                #
+                # roi_area_values_scaled = roi_area_values * roi_scale
 
                 ax2.set_xlim(np.min(roi_area_values_scaled), np.max(roi_area_values_scaled))
                 # print(np.min(roi_area_values_grounded), np.max(roi_area_values_grounded))
